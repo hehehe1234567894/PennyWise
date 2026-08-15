@@ -110,6 +110,21 @@ foreach ($p in '/', '/app.js', '/styles.css', '/sw.js', '/manifest.webmanifest',
   Check "static $p" ($null -ne $r -and $r.StatusCode -eq 200)
 }
 
+# 10. sync protocol (two-way sync: pull deltas, push changes, tombstones)
+$s0 = Call GET '/api/sync?since=0'
+Check 'sync pull returns rev' ($s0.ok -and $s0.data.rev -ge 1)
+$syncUid = 'smoke-sync-' + [guid]::NewGuid().ToString('N')
+$push = Call POST '/api/sync' @{ changes = @( @{ uid = $syncUid; type = 'put'; updated_at = '2099-01-01T00:00:00.000Z'; data = @{ ts = '2099-01-01T00:00:00.000Z'; amount = 9.9; direction = 'expense'; merchant = 'SyncTest'; category = 'Dining'; account = 'other'; source = 'manual'; status = 'confirmed' } } ) }
+Check 'sync push applied' ($push.ok -and ($push.data.applied -contains $syncUid))
+$pull2 = Call GET "/api/sync?since=$($s0.data.rev)"
+$foundPut = $pull2.data.changes | Where-Object { $_.uid -eq $syncUid -and $_.type -eq 'put' }
+Check 'sync pull contains pushed change' ($null -ne $foundPut)
+$del = Call POST '/api/sync' @{ changes = @( @{ uid = $syncUid; type = 'del'; updated_at = '2099-01-02T00:00:00.000Z' } ) }
+Check 'sync delete applied' ($del.ok -and ($del.data.applied -contains $syncUid))
+$pull3 = Call GET "/api/sync?since=$($pull2.data.rev)"
+$foundDel = $pull3.data.changes | Where-Object { $_.uid -eq $syncUid -and $_.type -eq 'del' }
+Check 'sync tombstone propagated' ($null -ne $foundDel)
+
 # 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null
 Call DELETE "/api/transactions/$dupId" | Out-Null

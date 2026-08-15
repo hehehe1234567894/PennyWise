@@ -36,9 +36,19 @@ iPhone（采集 + 查看）                 Windows PC（中枢，免费"服务�
 
 ## 数据模型（v1）
 
-- `transactions`：时间/金额/方向（expense·income·refund·transfer）/商户/分类/账户（wechat·alipay·bank·cash·other）/原文/来源（text·manual，后续 image·csv）/状态（pending·confirmed）/置信度/备注/是否人工改过。
+- `transactions`：时间/金额/方向（expense·income·refund·transfer）/商户/商品名/分类/账户（wechat·alipay·bank·cash·other）/原文/来源（text·image·manual）/状态（pending·confirmed）/置信度/备注/是否人工改过。
 - `rules`：商户 → 分类的记忆表。每次确认入账时学习；同一商户再次解析时自动套用历史分类并提高置信度——这是"越用越准"的正反馈机制。
 - `categories`：默认分类可扩展。数据库文件为 `data/pennywise.db`，备份即复制该文件。
+
+## 双向同步（v3，离线优先）
+
+手机与电脑各自持有完整本地镜像（IndexedDB），服务端是合并点而非必开机的服务器：
+
+- **身份与版本**：每条账目有全局唯一 `uid`（UUID）+ `updated_at` + 全局单调递增 `rev`；删除用墓碑（tombstone）传播。
+- **协议**：`GET /api/sync?since=rev` 拉取增量变更；`POST /api/sync` 推送本地变更（幂等，`client_id` 去重防重复采集）。
+- **冲突裁决**：拉取时若本地有未推送的改动且更新 → 保留本地（推送覆盖）；本地更旧 → 放弃本地、采用服务器。单用户双设备场景冲突极罕见。
+- **客户端行为**：所有操作先写本地镜像立即生效，再入待同步队列（IndexedDB ops）；1.5s 防抖 + 30s 周期 + 断线重连触发同步。离线截图暂存 base64，同步时服务器落盘并补跑视觉识别。
+- **代价与边界**：离线时无法用 AI 解析（模型在电脑上），离线采集的交易需手动填写或联网后识别；时间戳裁决依赖设备时钟大致准确。
 
 ## LLM 分层
 

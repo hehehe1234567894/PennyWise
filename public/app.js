@@ -221,11 +221,13 @@
       $('ed-account').value = tx.account || 'other'
       if (tx.ts) $('ed-ts').value = toLocalInput(tx.ts)
       $('ed-note').value = tx.note || ''
-      if (tx.raw_image) {
+      if (tx.raw_image || tx.local_image) {
         const img = document.createElement('img')
         img.className = 'ed-img'
-        img.src = '/api/image/' + encodeURIComponent(tx.raw_image)
         img.alt = '截图'
+        img.src = tx.raw_image
+          ? '/api/image/' + encodeURIComponent(tx.raw_image)
+          : 'data:' + (tx.local_mime || 'image/png') + ';base64,' + tx.local_image
         $('ed-form').insertBefore(img, $('ed-form').querySelector('.btn-row'))
       }
       if (tx.raw_text) {
@@ -245,10 +247,8 @@
       btn.textContent = '删除'
       btn.addEventListener('click', async () => {
         if (!confirm('确定删除这条记录？')) return
-        try {
-          await api('/api/transactions/' + tx.id, { method: 'DELETE' })
-          closeModal(); refreshAll(); toast('已删除')
-        } catch (e) { toast('删除失败：' + e.message) }
+        await localDelete(tx.uid)
+        closeModal(); refreshAll(); toast('已删除（同步中）')
       })
       $('ed-form').querySelector('.btn-row').appendChild(btn)
     }
@@ -277,15 +277,16 @@
     const d = payload.direction
     payload.category = d === 'expense' ? $('ed-category').value : (d === 'refund' ? '退款' : null)
     try {
+      const now = new Date().toISOString()
       if (!c.tx) {
-        await api('/api/transactions', { method: 'POST', body: payload })
+        const tx = Object.assign({ uid: uuid(), created_at: now, raw_text: null, raw_image: null, source: 'manual', confidence: null }, payload, { status: 'confirmed' })
+        await localApply(tx.uid, 'put', tx)
         toast('已入账 ✓')
-      } else if (c.tx.status === 'pending') {
-        await api(`/api/transactions/${c.tx.id}/confirm`, { method: 'POST', body: { overrides: payload } })
-        toast('已确认入账 ✓')
       } else {
-        await api(`/api/transactions/${c.tx.id}`, { method: 'PATCH', body: payload })
-        toast('已保存修改')
+        const merged = Object.assign({}, c.tx, payload, { status: 'confirmed' })
+        delete merged.local_image
+        await localApply(c.tx.uid, 'put', merged)
+        toast(c.tx.status === 'pending' ? '已确认入账 ✓' : '已保存修改')
       }
       closeModal()
       refreshAll()
@@ -350,13 +351,29 @@
       const b64 = await fileToBase64(file)
       const data = await api('/api/capture-image', { method: 'POST', body: { image_base64: b64, mime: file.type || 'image/png', client_id: clientId } })
       const { transaction, parse } = data
+      await mPut('tx', transaction)
       if (parse.code === 'ok') toast('识别完成，请确认')
       else if (parse.code === 'duplicate') toast('这条已经存在')
       else toast('识别失败（' + (parse.error || parse.code) + '），请手动填写')
       openEditor('parse', transaction)
       refreshAll()
     } catch (e) {
-      toast('识别失败：' + e.message)
+      if (/网络|令牌/.test(e.message)) {
+        const b64 = await fileToBase64(file)
+        const now = new Date().toISOString()
+        const tx = {
+          uid: uuid(), client_id: clientId, ts: now, created_at: now, amount: null, currency: 'CNY',
+          direction: 'expense', merchant: '', goods_name: '', category: '其他', account: 'other',
+          raw_text: '', raw_image: null, source: 'image', status: 'pending', confidence: null, note: '',
+          local_image: b64, local_mime: file.type || 'image/png',
+        }
+        await localApply(tx.uid, 'put', Object.assign({}, tx, { image_base64: b64 }))
+        toast('已离线暂存，同步后自动识别')
+        openEditor('parse', tx)
+        refreshAll()
+      } else {
+        toast('识别失败：' + e.message)
+      }
     }
   }
 
@@ -366,6 +383,7 @@
       const data = await api('/api/capture', { method: 'POST', body: { text, client_id: clientId } })
       $('capture-text').value = ''
       const { transaction, parse } = data
+      await mPut('tx', transaction) // 写入本地镜像（uid 由服务器分配）
       if (parse.code === 'no_key') toast('未配置 AI 模型，请手动填写确认')
       else if (parse.code === 'ok') toast('解析完成，请确认')
       else if (parse.code === 'duplicate') toast('这条已经存在')
@@ -373,28 +391,41 @@
       openEditor('parse', transaction)
       refreshAll()
     } catch (e) {
-      await outboxAdd({ client_id: clientId, text, ts: new Date().toISOString() })
-      toast('已离线暂存，联网后自动同步')
-      updateChip()
+      if (/网络|令牌/.test(e.message)) {
+        const now = new Date().toISOString()
+        const tx = {
+          uid: uuid(), client_id: clientId, ts: now, created_at: now, amount: null, currency: 'CNY',
+          direction: 'expense', merchant: '', goods_name: '', category: '其他', account: 'other',
+          raw_text: text, raw_image: null, source: 'text', status: 'pending', confidence: null, note: '',
+        }
+        $('capture-text').value = ''
+        await localApply(tx.uid, 'put', tx)
+        toast('已离线暂存，联网后自动同步')
+        openEditor('parse', tx)
+        refreshAll()
+      } else {
+        toast('解析失败：' + e.message)
+      }
     }
   }
 
-  // ---------- 列表渲染 ----------
+  // ---------- 列表渲染（读本地镜像，离线可用） ----------
   let lastListItems = []
 
   async function renderPending() {
     const list = $('pending-list')
     try {
-      const data = await api('/api/transactions?status=pending&limit=100&order=desc')
-      const items = data.items
+      const items = (await mAll('tx').catch(() => []))
+        .filter((t) => t.status === 'pending')
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
       $('pending-count').textContent = items.length ? items.length + ' 条' : ''
       $('pending-empty').classList.toggle('hidden', items.length > 0)
       list.innerHTML = items.map((t) => `
-        <div class="card tx-card" data-id="${t.id}">
+        <div class="card tx-card" data-id="${esc(t.uid)}">
           <div class="tx-main">
             <div class="tx-amt expense">${fmtMoney(t.amount)}</div>
             <div class="tx-info">
-              <div class="tx-merchant">${esc(t.merchant || '（未识别商户）')}</div>
+              <div class="tx-merchant">${esc(t.merchant || '（未识别商户）')}${t.raw_image || t.local_image ? ' 🖼' : ''}</div>
               <div class="tx-raw">${esc(t.raw_text || '')}</div>
             </div>
           </div>
@@ -411,66 +442,74 @@
   $('pending-list').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-act]')
     if (!btn) return
-    const id = btn.closest('.tx-card').dataset.id
-    let tx
-    try {
-      const data = await api('/api/transactions?status=pending&limit=100')
-      tx = data.items.find((t) => String(t.id) === id)
-    } catch (err) { return toast('加载失败：' + err.message) }
+    const uid = btn.closest('.tx-card').dataset.id
+    const tx = (await mAll('tx').catch(() => [])).find((t) => t.uid === uid)
     if (!tx) return toast('记录不存在')
     if (btn.dataset.act === 'edit') return openEditor('parse', tx)
-    try {
-      await api('/api/transactions/' + id, { method: 'DELETE' })
-      refreshAll(); toast('已删除')
-    } catch (err) { toast('删除失败：' + err.message) }
+    await localDelete(uid)
+    refreshAll(); toast('已删除（同步中）')
   })
+
+  function localSummary(all, month) {
+    const confirmed = all.filter((t) => t.status === 'confirmed' && t.amount != null && String(t.ts || '').startsWith(month))
+    let expense = 0, income = 0, refund = 0, transfer = 0
+    const byCat = {}
+    for (const t of confirmed) {
+      const a = Number(t.amount) || 0
+      if (t.direction === 'expense') { expense += a; byCat[t.category || '其他'] = (byCat[t.category || '其他'] || 0) + a }
+      else if (t.direction === 'income') income += a
+      else if (t.direction === 'refund') refund += a
+      else if (t.direction === 'transfer') transfer += a
+    }
+    const byCategory = Object.entries(byCat)
+      .map(([name, total]) => ({ name, total, n: confirmed.filter((t) => (t.category || '其他') === name && t.direction === 'expense').length }))
+      .sort((a, b) => b.total - a.total)
+    return {
+      month, expense: Math.round(expense * 100) / 100, income: Math.round(income * 100) / 100,
+      refund, transfer, balance: Math.round((income + refund - expense) * 100) / 100,
+      count: confirmed.length, byCategory,
+      pendingCount: all.filter((t) => t.status === 'pending').length,
+    }
+  }
 
   async function renderList() {
     const month = $('list-month').value || localMonth()
-    const q = $('list-q').value.trim()
-    try {
-      const data = await api(`/api/transactions?month=${encodeURIComponent(month)}&q=${encodeURIComponent(q)}&limit=200&order=desc`)
-      lastListItems = data.items
-      $('list-items').innerHTML = data.items.map((t) => {
-        const cls = t.direction === 'income' ? 'income' : (t.direction === 'refund' ? 'refund' : 'expense')
-        const sign = (t.direction === 'income' || t.direction === 'refund') ? '+' : '-'
-        return `<div class="card row-card" data-id="${t.id}">
-          <div class="row-left">
-            <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}</div>
-            <div class="row-sub">${fmtTs(t.ts)} · ${esc(t.category || DIR_LABEL[t.direction] || '')} · ${esc(ACC_LABEL[t.account] || '')}</div>
-          </div>
-          <div class="row-amt ${cls}">${sign}${fmtMoney(t.amount)}</div>
-        </div>`
-      }).join('')
-      $('list-empty').classList.toggle('hidden', data.items.length > 0)
-      const s = await summary(month)
-      $('list-summary').innerHTML = `
-        <span>收入 <b class="income">+${fmtMoney(s.income)}</b></span>
-        <span>支出 <b class="expense">-${fmtMoney(s.expense)}</b></span>
-        <span>结余 <b>${fmtMoney(s.balance)}</b></span>`
-    } catch (e) {
-      $('list-items').innerHTML = `<p class="empty">加载失败：${esc(e.message)}</p>`
-    }
+    const q = $('list-q').value.trim().toLowerCase()
+    const all = await mAll('tx').catch(() => [])
+    const items = all
+      .filter((t) => String(t.ts || '').startsWith(month) && (!q || [t.merchant, t.goods_name, t.note, t.raw_text].some((x) => String(x || '').toLowerCase().includes(q))))
+      .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
+    lastListItems = items
+    $('list-items').innerHTML = items.map((t) => {
+      const cls = t.direction === 'income' ? 'income' : (t.direction === 'refund' ? 'refund' : 'expense')
+      const sign = (t.direction === 'income' || t.direction === 'refund') ? '+' : '-'
+      return `<div class="card row-card" data-id="${esc(t.uid)}">
+        <div class="row-left">
+          <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}${t.raw_image || t.local_image ? ' 🖼' : ''}</div>
+          <div class="row-sub">${fmtTs(t.ts)} · ${esc(t.category || DIR_LABEL[t.direction] || '')} · ${esc(ACC_LABEL[t.account] || '')}</div>
+        </div>
+        <div class="row-amt ${cls}">${sign}${fmtMoney(t.amount)}</div>
+      </div>`
+    }).join('')
+    $('list-empty').classList.toggle('hidden', items.length > 0)
+    const s = localSummary(all, month)
+    $('list-summary').innerHTML = `
+      <span>收入 <b class="income">+${fmtMoney(s.income)}</b></span>
+      <span>支出 <b class="expense">-${fmtMoney(s.expense)}</b></span>
+      <span>结余 <b>${fmtMoney(s.balance)}</b></span>`
   }
 
   $('list-items').addEventListener('click', (e) => {
     const card = e.target.closest('.row-card')
     if (!card) return
-    const tx = lastListItems.find((t) => String(t.id) === card.dataset.id)
+    const tx = lastListItems.find((t) => t.uid === card.dataset.id)
     if (tx) openEditor('edit', tx)
   })
 
-  async function summary(month) {
-    try {
-      return await api('/api/summary?month=' + encodeURIComponent(month))
-    } catch (e) {
-      return { month, income: 0, expense: 0, refund: 0, transfer: 0, balance: 0, count: 0, byCategory: [], pendingCount: 0 }
-    }
-  }
-
   async function renderStats() {
     const month = $('stats-month').value || localMonth()
-    const s = await summary(month)
+    const all = await mAll('tx').catch(() => [])
+    const s = localSummary(all, month)
     $('stats-cards').innerHTML = `
       <div class="stat-card"><div class="stat-num income">+${fmtMoney(s.income)}</div><div class="stat-label">收入</div></div>
       <div class="stat-card"><div class="stat-num expense">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
@@ -581,60 +620,98 @@
   }
   $('btn-settings').addEventListener('click', showSettings)
 
-  // ---------- 离线队列（IndexedDB） ----------
-  let outboxDb = null
-  function openOutbox() {
+  // ---------- 本地镜像 + 双向同步（离线优先） ----------
+  let mirrorDb = null
+  function openMirror() {
     return new Promise((resolve, reject) => {
-      if (outboxDb) return resolve(outboxDb)
-      const r = indexedDB.open('pw-outbox', 1)
-      r.onupgradeneeded = () => r.result.createObjectStore('captures', { keyPath: 'client_id' })
-      r.onsuccess = () => { outboxDb = r.result; resolve(outboxDb) }
+      if (mirrorDb) return resolve(mirrorDb)
+      const r = indexedDB.open('pw-mirror', 1)
+      r.onupgradeneeded = () => {
+        const d = r.result
+        if (!d.objectStoreNames.contains('tx')) d.createObjectStore('tx', { keyPath: 'uid' })
+        if (!d.objectStoreNames.contains('ops')) d.createObjectStore('ops', { keyPath: 'uid' })
+        if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', { keyPath: 'k' })
+      }
+      r.onsuccess = () => { mirrorDb = r.result; resolve(mirrorDb) }
       r.onerror = () => reject(r.error)
     })
   }
-  async function outboxAdd(item) {
-    const db = await openOutbox()
-    return new Promise((resolve, reject) => {
-      const t = db.transaction('captures', 'readwrite')
-      t.objectStore('captures').put(item)
-      t.oncomplete = () => resolve(); t.onerror = () => reject(t.error)
-    })
+  function mReq(store, mode, fn) {
+    return openMirror().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction(store, mode)
+      const rq = fn(t.objectStore(store))
+      rq.onsuccess = () => resolve(rq.result)
+      rq.onerror = () => reject(rq.error)
+    }))
   }
-  async function outboxAll() {
-    const db = await openOutbox()
-    return new Promise((resolve, reject) => {
-      const t = db.transaction('captures', 'readonly')
-      const r = t.objectStore('captures').getAll()
-      r.onsuccess = () => resolve(r.result || []); r.onerror = () => reject(r.error)
-    })
+  const mAll = (s) => mReq(s, 'readonly', (o) => o.getAll())
+  const mGet = (s, k) => mReq(s, 'readonly', (o) => o.get(k))
+  const mPut = (s, v) => mReq(s, 'readwrite', (o) => o.put(v))
+  const mDel = (s, k) => mReq(s, 'readwrite', (o) => o.delete(k))
+
+  // 任何改动：先写本地镜像（立即生效），再进待同步队列
+  async function localApply(uid, type, data) {
+    const now = new Date().toISOString()
+    const mirrorData = Object.assign({}, data)
+    delete mirrorData.image_base64 // 大体积图片只放同步队列，镜像里不存两份
+    await mPut('tx', Object.assign({}, mirrorData, { uid }))
+    await mPut('ops', { uid, type, data, updated_at: now })
+    syncSoon()
   }
-  async function outboxDel(id) {
-    const db = await openOutbox()
-    return new Promise((resolve, reject) => {
-      const t = db.transaction('captures', 'readwrite')
-      t.objectStore('captures').delete(id)
-      t.oncomplete = () => resolve(); t.onerror = () => reject(t.error)
-    })
+  async function localDelete(uid) {
+    await mDel('tx', uid)
+    await mPut('ops', { uid, type: 'del', data: null, updated_at: new Date().toISOString() })
+    syncSoon()
   }
-  async function syncOutbox() {
-    if (!navigator.onLine) return
-    const items = await outboxAll().catch(() => [])
-    if (!items.length) { updateChip(); return }
-    let ok = 0
-    for (const it of items) {
-      try {
-        await api('/api/capture', { method: 'POST', body: { text: it.text, client_id: it.client_id } })
-        await outboxDel(it.client_id)
-        ok++
-      } catch (e) {
-        if (/token|令牌/.test(e.message)) break
+
+  let syncTimer = null
+  function syncSoon() { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 1500) }
+
+  async function syncNow() {
+    if (!navigator.onLine) { updateChip(); return }
+    const base = apiBase || ''
+    const hdrs = token ? { 'X-Auth-Token': token } : {}
+    // 1) 拉取服务器增量
+    const since = Number((await mGet('meta', 'rev').catch(() => null))?.v || 0)
+    try {
+      const r = await fetch(base + '/api/sync?since=' + since, { headers: hdrs })
+      if (r.ok) {
+        const j = await r.json()
+        const ops = await mAll('ops').catch(() => [])
+        const pend = new Map(ops.map((o) => [o.uid, o]))
+        for (const ch of j.data.changes || []) {
+          const p = pend.get(ch.uid)
+          const srvTs = ch.type === 'put' ? (ch.data?.updated_at || '') : (ch.updated_at || '')
+          if (p) {
+            if ((p.updated_at || '') >= srvTs) continue // 本地更新 → 保留本地版本，稍后推送覆盖
+            await mDel('ops', ch.uid) // 本地更旧 → 放弃本地改动
+          }
+          if (ch.type === 'del') await mDel('tx', ch.uid)
+          else await mPut('tx', Object.assign({}, ch.data, { uid: ch.uid }))
+        }
+        await mPut('meta', { k: 'rev', v: String(j.data.rev) })
       }
-    }
+    } catch (e) { /* 网络抖动，下次再拉 */ }
+    // 2) 推送本地变更
+    try {
+      const ops = await mAll('ops').catch(() => [])
+      if (ops.length) {
+        const r = await fetch(base + '/api/sync', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, hdrs),
+          body: JSON.stringify({ changes: ops.map((o) => ({ uid: o.uid, type: o.type, data: o.data, updated_at: o.updated_at })) }),
+        })
+        if (r.ok) {
+          const j = await r.json()
+          for (const uid of j.data.applied || []) await mDel('ops', uid)
+        }
+      }
+    } catch (e) { /* 稍后重试 */ }
     updateChip()
-    if (ok) { toast(`已自动同步 ${ok} 条离线记录`); renderPending().catch(() => {}) }
+    refreshAll()
   }
   async function updateChip() {
-    const n = (await outboxAll().catch(() => [])).length
+    const n = (await mAll('ops').catch(() => [])).length
     const chip = $('net-chip')
     if (!navigator.onLine) {
       chip.textContent = '离线'; chip.className = 'chip chip-off'
@@ -670,7 +747,7 @@
     }).join('')
   }
 
-  window.addEventListener('online', () => { updateChip(); syncOutbox(); refreshEndpoints().catch(() => {}) })
+  window.addEventListener('online', () => { updateChip(); syncNow(); refreshEndpoints().catch(() => {}) })
   window.addEventListener('offline', updateChip)
 
   // ---------- 锁定屏 ----------
@@ -739,11 +816,19 @@
     $('modal').addEventListener('click', (e) => {
       if (e.target === $('modal') || e.target.closest('[data-close]')) closeModal()
     })
+    try { indexedDB.deleteDatabase('pw-outbox') } catch (e) { /* 清理旧版离线队列 */ }
     refreshEndpoints().catch(() => {})
-    try { categories = await api('/api/categories') } catch (e) { /* 网络或令牌问题，稍后再试 */ }
+    // 分类：在线拉取并缓存到本地，离线用缓存
+    try {
+      categories = await api('/api/categories')
+      await mPut('meta', { k: 'categories', v: JSON.stringify(categories) })
+    } catch (e) {
+      const cached = (await mGet('meta', 'categories').catch(() => null))?.v
+      if (cached) { try { categories = JSON.parse(cached) } catch { /* 忽略 */ } }
+    }
     updateChip()
-    syncOutbox()
-    setInterval(syncOutbox, 30000)
+    syncNow()
+    setInterval(syncNow, 30000)
     setInterval(() => { refreshEndpoints().catch(() => {}) }, 60000)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
   }

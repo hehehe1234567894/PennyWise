@@ -5,7 +5,7 @@ import crypto from 'node:crypto'
 import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
-import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth } from './db.js'
+import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseCapture, parseImage, llmConfig, visionConfig } from './llm.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
@@ -188,7 +188,7 @@ app.post('/api/capture', async (req, res) => {
   const result = await parseCapture(raw)
   let fields = {
     ts: validTs(ts) || nowIso(), amount: null, direction: 'expense', merchant: '',
-    category: null, account: 'other', note: '', confidence: null,
+    goods_name: '', category: null, account: 'other', note: '', confidence: null,
   }
   let parse = { code: 'no_key' }
 
@@ -210,12 +210,12 @@ app.post('/api/capture', async (req, res) => {
   }
 
   const info = db.prepare(`
-    INSERT INTO transactions (client_id, ts, created_at, amount, currency, direction, merchant, category, account, raw_text, source, status, confidence, note, edited)
-    VALUES (?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, 'text', 'pending', ?, ?, 0)
+    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'text', 'pending', ?, ?, 0, ?, ?)
   `).run(
-    clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant,
+    newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
     fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, raw, fields.confidence, fields.note,
+    fields.account, raw, null, fields.confidence, fields.note, nextRev(), nowIso(),
   )
 
   res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
@@ -274,12 +274,12 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
   }
 
   const info = db.prepare(`
-    INSERT INTO transactions (client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited)
-    VALUES (?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', 'pending', ?, ?, 0)
+    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', 'pending', ?, ?, 0, ?, ?)
   `).run(
-    clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
+    newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
     fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, fields.raw_text, fields.raw_image, fields.confidence, fields.note,
+    fields.account, fields.raw_text, fields.raw_image, fields.confidence, fields.note, nextRev(), nowIso(),
   )
 
   res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
@@ -307,9 +307,9 @@ app.post('/api/transactions', (req, res) => {
   const ts = validTs(b.ts) || nowIso()
   const note = typeof b.note === 'string' ? b.note.trim().slice(0, 200) : ''
   const info = db.prepare(`
-    INSERT INTO transactions (ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, source, status, note, edited)
-    VALUES (?, ?, ?, 'CNY', ?, ?, ?, ?, ?, NULL, 'manual', 'confirmed', ?, 0)
-  `).run(ts, nowIso(), Math.round(amount * 100) / 100, direction, merchant, goodsName, category, account, note)
+    INSERT INTO transactions (uid, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, source, status, note, edited, rev, updated_at)
+    VALUES (?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, NULL, 'manual', 'confirmed', ?, 0, ?, ?)
+  `).run(newUid(), ts, nowIso(), Math.round(amount * 100) / 100, direction, merchant, goodsName, category, account, note, nextRev(), nowIso())
   if (merchant && category) upsertRule(merchant, category)
   res.status(201).json({ ok: true, data: getTx(info.lastInsertRowid) })
 })
@@ -332,6 +332,7 @@ app.post('/api/transactions/:id/confirm', (req, res) => {
     UPDATE transactions SET ts = ?, amount = ?, direction = ?, merchant = ?, goods_name = ?, category = ?, account = ?, note = ?, status = 'confirmed', edited = edited + 1
     WHERE id = ?
   `).run(ts, Math.round(amount * 100) / 100, direction, merchant, goodsName, category, account, note, tx.id)
+  bumpTx(tx.id)
   if (merchant && category) upsertRule(merchant, category)
   res.json({ ok: true, data: getTx(tx.id) })
 })
@@ -360,14 +361,134 @@ app.patch('/api/transactions/:id', (req, res) => {
   if (Object.keys(patch).length === 0) return fail(res, 400, 'bad_request', '没有可更新的字段')
   const sets = Object.keys(patch).map((k) => `${k} = ?`).join(', ')
   db.prepare(`UPDATE transactions SET ${sets}, edited = edited + 1 WHERE id = ?`).run(...Object.values(patch), tx.id)
+  bumpTx(tx.id)
   res.json({ ok: true, data: getTx(tx.id) })
 })
 
 app.delete('/api/transactions/:id', (req, res) => {
   const tx = getTx(req.params.id)
   if (!tx) return fail(res, 404, 'not_found', '记录不存在')
+  // 删除 → 墓碑（供同步传播删除）+ 清除行
+  db.prepare('INSERT INTO tombstones (uid, rev, updated_at) VALUES (?, ?, ?)').run(tx.uid || newUid(), nextRev(), nowIso())
   db.prepare('DELETE FROM transactions WHERE id = ?').run(tx.id)
   res.json({ ok: true, data: { deleted: tx.id } })
+})
+
+// ---- 双向同步：增量拉取 ----
+app.get('/api/sync', (req, res) => {
+  const since = Math.max(Number(req.query.since) || 0, 0)
+  const cur = currentRev()
+  const rows = db.prepare('SELECT * FROM transactions WHERE rev > ?').all(since)
+  const changes = rows.map((r) => ({ uid: r.uid, type: 'put', rev: r.rev, data: txToSync(r) }))
+  const tombs = db.prepare('SELECT * FROM tombstones WHERE rev > ?').all(since)
+  for (const t of tombs) changes.push({ uid: t.uid, type: 'del', rev: t.rev, updated_at: t.updated_at })
+  changes.sort((a, b) => a.rev - b.rev)
+  res.json({ ok: true, data: { rev: cur, changes } })
+})
+
+// 客户端提交的字段清洗（与手动创建同规）
+function sanitizeTxData(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const amount = raw.amount == null ? null : Number(raw.amount)
+  if (amount !== null && (!Number.isFinite(amount) || amount <= 0)) return null
+  const direction = DIRECTIONS.includes(raw.direction) ? raw.direction : 'expense'
+  const status = ['pending', 'confirmed'].includes(raw.status) ? raw.status : 'confirmed'
+  const ts = validTs(raw.ts) || nowIso()
+  const cat = direction === 'expense' ? (typeof raw.category === 'string' && raw.category.trim() ? raw.category.trim().slice(0, 20) : '其他') : null
+  return {
+    ts,
+    amount: amount === null ? null : Math.round(amount * 100) / 100,
+    direction,
+    merchant: typeof raw.merchant === 'string' ? raw.merchant.trim().slice(0, 120) : '',
+    goods_name: typeof raw.goods_name === 'string' ? raw.goods_name.trim().slice(0, 120) : '',
+    category: cat,
+    account: ACCOUNTS.includes(raw.account) ? raw.account : 'other',
+    raw_text: typeof raw.raw_text === 'string' ? raw.raw_text.slice(0, 4000) : '',
+    raw_image: typeof raw.raw_image === 'string' ? raw.raw_image.slice(0, 200) : null,
+    image_base64: typeof raw.image_base64 === 'string' ? raw.image_base64.slice(0, 12 * 1024 * 1024) : null,
+    source: ['text', 'image', 'manual'].includes(raw.source) ? raw.source : 'manual',
+    status,
+    confidence: raw.confidence == null ? null : Math.min(1, Math.max(0, Number(raw.confidence) || 0)),
+    note: typeof raw.note === 'string' ? raw.note.trim().slice(0, 200) : '',
+    client_id: typeof raw.client_id === 'string' ? raw.client_id.slice(0, 64) : null,
+    created_at: validTs(raw.created_at) || nowIso(),
+  }
+}
+
+// 应用单条客户端变更（冲突按 updated_at 裁决：服务器更新则跳过）
+async function applyChange(c) {
+  if (!c || typeof c.uid !== 'string' || !c.uid || c.uid.length > 80) throw new Error('bad uid')
+  const existing = db.prepare('SELECT * FROM transactions WHERE uid = ?').get(c.uid)
+  const incomingTs = String(c.updated_at || '')
+  const now = nowIso()
+
+  if (c.type === 'del') {
+    if (existing) {
+      if ((existing.updated_at || '') > incomingTs) return // 服务器版本更新，保留
+      db.prepare('INSERT INTO tombstones (uid, rev, updated_at) VALUES (?, ?, ?)').run(c.uid, nextRev(), now)
+      db.prepare('DELETE FROM transactions WHERE uid = ?').run(c.uid)
+    }
+    return
+  }
+
+  const d = sanitizeTxData(c.data)
+  if (!d) throw new Error('bad data')
+
+  // 离线采集的截图：先落盘，再跑视觉解析补全字段
+  if (d.image_base64 && !d.raw_image) {
+    const buf = Buffer.from(d.image_base64, 'base64')
+    const mime = detectImage(buf)
+    if (mime) {
+      d.raw_image = saveImage(buf, mime)
+      const vr = await parseImage(buf, mime)
+      if (vr.ok) {
+        const v = vr.data
+        d.ts = v.ts || d.ts
+        if (v.amount != null) d.amount = v.amount
+        if (v.merchant) d.merchant = v.merchant
+        if (v.goods_name) d.goods_name = v.goods_name
+        if (v.category && d.direction === 'expense') d.category = v.category
+        d.account = v.account
+        d.raw_text = v.raw_text || d.raw_text
+        d.confidence = v.confidence
+      }
+    }
+  }
+
+  if (existing) {
+    if ((existing.updated_at || '') > incomingTs) return // 服务器版本更新，跳过
+    const rev = nextRev()
+    db.prepare(`
+      UPDATE transactions SET ts=?, amount=?, direction=?, merchant=?, goods_name=?, category=?, account=?, raw_text=?, raw_image=?, source=?, status=?, confidence=?, note=?, client_id=?, edited=edited+1, rev=?, updated_at=?
+      WHERE uid=?
+    `).run(d.ts, d.amount, d.direction, d.merchant, d.goods_name, d.category, d.account, d.raw_text, d.raw_image, d.source, d.status, d.confidence, d.note, d.client_id, rev, now, c.uid)
+    if (d.merchant && d.category) upsertRule(d.merchant, d.category)
+    return
+  }
+
+  // 新增：client_id 幂等（同一采集重试不重复）
+  if (d.client_id) {
+    const byClient = db.prepare('SELECT * FROM transactions WHERE client_id = ? AND uid != ?').get(d.client_id, c.uid)
+    if (byClient) return
+  }
+  const rev = nextRev()
+  db.prepare(`
+    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
+    VALUES (?,?,?,?,?,'CNY',?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(c.uid, d.client_id, d.ts, d.created_at, d.amount, d.direction, d.merchant, d.goods_name, d.category, d.account, d.raw_text, d.raw_image, d.source, d.status, d.confidence, d.note, 0, rev, now)
+  if (d.merchant && d.category) upsertRule(d.merchant, d.category)
+}
+
+// ---- 双向同步：推送本地变更 ----
+app.post('/api/sync', async (req, res) => {
+  const b = req.body || {}
+  const changes = Array.isArray(b.changes) ? b.changes.slice(0, 200) : []
+  const applied = []
+  const skipped = []
+  for (const c of changes) {
+    try { await applyChange(c); applied.push(c.uid) } catch (e) { skipped.push(c.uid) }
+  }
+  res.json({ ok: true, data: { rev: currentRev(), applied, skipped } })
 })
 
 // ---- 列表 ----

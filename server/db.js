@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { DATA_DIR } from './env.js'
 import { DEFAULT_CATEGORIES } from './categories.js'
@@ -53,6 +54,48 @@ for (const kind of Object.keys(DEFAULT_CATEGORIES)) {
 const cols = db.prepare('PRAGMA table_info(transactions)').all().map((r) => r.name)
 if (!cols.includes('goods_name')) {
   db.exec("ALTER TABLE transactions ADD COLUMN goods_name TEXT NOT NULL DEFAULT ''")
+}
+
+// v3 双向同步：uid（全局唯一）/ updated_at（冲突裁决）/ rev（增量拉取）/ 墓碑与全局版本号
+if (!cols.includes('uid')) db.exec('ALTER TABLE transactions ADD COLUMN uid TEXT')
+if (!cols.includes('updated_at')) db.exec("ALTER TABLE transactions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+if (!cols.includes('rev')) db.exec('ALTER TABLE transactions ADD COLUMN rev INTEGER NOT NULL DEFAULT 0')
+db.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid) WHERE uid IS NOT NULL AND uid != '';
+CREATE TABLE IF NOT EXISTS tombstones (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+`)
+// 回填历史数据：分配 uid 与 rev，让存量账本可同步
+let rev = Number(db.prepare("SELECT v FROM meta WHERE k='rev'").get()?.v ?? 0)
+const orphans = db.prepare("SELECT id, ts FROM transactions WHERE uid IS NULL OR uid = '' OR rev = 0").all()
+const backfill = db.prepare('UPDATE transactions SET uid = ?, updated_at = ?, rev = ? WHERE id = ?')
+for (const r of orphans) {
+  rev += 1
+  backfill.run(crypto.randomUUID(), r.ts || new Date().toISOString(), rev, r.id)
+}
+if (rev > 0) db.prepare("INSERT INTO meta (k, v) VALUES ('rev', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(rev))
+
+export function newUid() { return crypto.randomUUID() }
+export function currentRev() { return Number(db.prepare("SELECT v FROM meta WHERE k='rev'").get()?.v ?? 0) }
+export function nextRev() {
+  const n = currentRev() + 1
+  db.prepare("INSERT INTO meta (k, v) VALUES ('rev', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(n))
+  return n
+}
+export function bumpTx(id) {
+  const rev2 = nextRev()
+  db.prepare('UPDATE transactions SET rev = ?, updated_at = ? WHERE id = ?').run(rev2, nowIso(), id)
+  return rev2
+}
+// 同步用字段白名单（不暴露服务器内部 id/rev）
+export function txToSync(r) {
+  return {
+    ts: r.ts, amount: r.amount, currency: r.currency, direction: r.direction,
+    merchant: r.merchant, goods_name: r.goods_name, category: r.category,
+    account: r.account, raw_text: r.raw_text, raw_image: r.raw_image,
+    source: r.source, status: r.status, confidence: r.confidence, note: r.note,
+    client_id: r.client_id, created_at: r.created_at, updated_at: r.updated_at,
+  }
 }
 
 export function getCategories() {
