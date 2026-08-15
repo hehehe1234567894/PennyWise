@@ -203,8 +203,8 @@ app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (r
   res.json({ ok: true, data: { skipped: false, transaction: r.transaction } })
 })
 
-// ---- 账单导入（微信/支付宝 CSV，邮箱自动收取或手动上传） ----
-const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, error: '' }
+// ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----
+const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, passwords: 0, error: '' }
 async function runBillImport() {
   billStatus.enabled = mailConfig().billsEnabled
   try {
@@ -212,6 +212,7 @@ async function runBillImport() {
     billStatus.lastRun = nowIso()
     billStatus.imported = r.imported
     billStatus.skipped = r.skipped
+    billStatus.passwords = r.passwords || 0
     billStatus.error = r.error || ''
     // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）
     if (!r.error && r.files > 0) {
@@ -221,7 +222,7 @@ async function runBillImport() {
   } catch (e) {
     billStatus.lastRun = nowIso()
     billStatus.error = String(e?.message || e).slice(0, 200)
-    return { imported: 0, skipped: 0, error: billStatus.error }
+    return { imported: 0, skipped: 0, passwords: 0, error: billStatus.error }
   }
 }
 app.post('/api/import-bills', async (req, res) => {

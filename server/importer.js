@@ -246,10 +246,15 @@ export async function importCsvByName(name, buf) {
 // ---- 微信/支付宝账单 = 加密 zip + 单独一封解压密码邮件 → 自动配对 ----
 
 export function extractPassword(subject, text) {
-  const s = String(subject || '') + '\n' + String(text || '')
+  const subj = String(subject || '').trim()
+  const body = String(text || '').trim()
+  // 规则一：标题含"密码"，正文就是密码本身（无其他内容），如 123456 / AB12CD34
+  if (/密码/.test(subj) && /^[A-Za-z0-9]{4,16}$/.test(body)) return body
+  // 规则二：含"密码"字样，按「解压密码：XXXX」/「密码：XXXX」格式提取（支持 是/为 连接词）
+  const s = subj + '\n' + body
   if (!/密码/.test(s)) return null
   const m = s.match(/解压密码[：: ]*(?:是|为)?\s*([A-Za-z0-9]{4,16})/)
-    || s.match(/密码[：: ]*(?:是|为)?\s*(\d{4,8})/)
+    || s.match(/密码[：: ]*(?:是|为)?\s*([A-Za-z0-9]{4,16})/)
   return m ? m[1] : null
 }
 
@@ -309,12 +314,16 @@ export async function importBills(cfg) {
   try {
     const since = new Date(Date.now() - 45 * 24 * 3600 * 1000)
     for await (const msg of client.fetch({ since }, { envelope: true, bodyStructure: true }, { uid: true })) {
-      // 隐私红线：只读白名单发件人（微信/支付宝/银行账单），其他邮件一律不碰
+      // 隐私红线：两类邮件可读——
+      // ① 白名单发件人（微信/支付宝/银行）的账单邮件：读附件（zip/csv）+ 提取密码；
+      // ② 自己发给自己（MAIL_USER）的密码邮件：只提取密码，绝不碰附件。
       const from = (msg.envelope.from || []).map((f) => f.address || '').join(' ')
-      if (!new RegExp(cfg.fromFilter, 'i').test(from)) continue
-      // 解压密码邮件：从主题/正文提取密码
+      const isSelf = String(cfg.user || '').trim().toLowerCase() === from.trim().toLowerCase()
+      const isWhitelist = new RegExp(cfg.fromFilter, 'i').test(from)
+      if (!isSelf && !isWhitelist) continue
       const pw = extractPassword(msg.envelope.subject || '', msg.text || '')
       if (pw && !passwords.includes(pw)) passwords.push(pw)
+      if (!isWhitelist) continue // 自己发的邮件到此为止，不读附件
       for (const att of msg.attachments || []) {
         const name = att.filename || ''
         try {
@@ -365,5 +374,5 @@ export async function importBills(cfg) {
   }
   savePendingZips(fresh)
   savePasswordHistory(allPw.slice(-10))
-  return { imported, skipped, error: '', files: newZips.length }
+  return { imported, skipped, error: '', files: newZips.length, passwords: passwords.length }
 }
