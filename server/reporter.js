@@ -65,6 +65,17 @@ export function summarizeMonth(month) {
   }
 }
 
+// 账单是否超过 35 天未导入（月报中提醒）
+export function billImportStale() {
+  const last = db.prepare("SELECT v FROM meta WHERE k = 'last_bill_import'").get()?.v
+  if (!last) return true
+  const t = Date.parse(last)
+  if (Number.isNaN(t)) return true
+  return Date.now() - t > 35 * 24 * 3600 * 1000
+}
+
+const BILL_REMINDER = '微信/支付宝账单已超过 35 天未导入。支付宝可在 App 里开启"每月自动发送账单到邮箱"（设置一次永久自动）；微信账单请每月在 微信 → 我 → 服务 → 钱包 → 账单 → 下载账单 手动发送到邮箱（发送后自动入库，无需其他操作）。'
+
 export function buildReportText(s) {
   const lines = []
   lines.push(`PennyWise 月度报告 · ${monthLabel(s.month)}`)
@@ -91,6 +102,10 @@ export function buildReportText(s) {
     s.incomes.forEach((t) => lines.push(`  ${money(t.amount)}  ${t.merchant || ''}${t.note ? '（' + t.note + '）' : ''}`))
     lines.push('')
   }
+  if (billImportStale()) {
+    lines.push('⚠ 提醒：' + BILL_REMINDER)
+    lines.push('')
+  }
   lines.push('—— PennyWise 自动生成')
   return lines.join('\n')
 }
@@ -101,6 +116,9 @@ export function buildReportHtml(s) {
   const topRows = s.topExpenses.map((t) => `<tr><td>${money(-t.amount)}</td><td>${esc(t.merchant || '')}${t.goods_name ? '（' + esc(t.goods_name) + '）' : ''}</td><td>${esc(t.category || '')}</td></tr>`).join('')
   const incRows = s.incomes.map((t) => `<tr><td>${money(t.amount)}</td><td>${esc(t.merchant || '')}${t.note ? '（' + esc(t.note) + '）' : ''}</td></tr>`).join('')
   const diff = s.diffPct !== null ? `<p>支出环比：<b>${s.diffPct > 0 ? '↑' : '↓'}${Math.abs(s.diffPct)}%</b>（上月 ${money(-s.prevExpense)}）</p>` : ''
+  const reminder = billImportStale()
+    ? `<p style="background:#2a2410;border:1px solid #f59e0b55;color:#fbbf24;border-radius:8px;padding:10px 12px;font-size:13px">⚠ ${esc(BILL_REMINDER)}</p>`
+    : ''
   return `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#0f1115;color:#e8eaf0;padding:24px">
 <div style="max-width:520px;margin:0 auto;background:#171a21;border-radius:12px;padding:24px;border:1px solid #2a2f3a">
@@ -111,6 +129,7 @@ export function buildReportHtml(s) {
   <div style="flex:1;min-width:120px"><div style="color:#8b93a5;font-size:12px">结余</div><div style="font-size:18px;font-weight:700">${money(s.balance)}</div></div>
 </div>
 ${diff}
+${reminder}
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">支出分类</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">${catRows || '<tr><td>本月暂无支出</td></tr>'}</table>
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">最大支出</h3>

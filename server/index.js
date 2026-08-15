@@ -215,6 +215,10 @@ async function runBillImport() {
     billStatus.imported = r.imported
     billStatus.skipped = r.skipped
     billStatus.error = r.error || ''
+    // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）
+    if (!r.error && r.files > 0) {
+      db.prepare("INSERT INTO meta (k, v) VALUES ('last_bill_import', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(nowIso())
+    }
     return r
   } catch (e) {
     billStatus.lastRun = nowIso()
