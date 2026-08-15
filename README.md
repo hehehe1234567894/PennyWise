@@ -45,7 +45,8 @@
 
 > **分享式记账为什么需要 HTTPS**：iOS 只允许"已添加到主屏幕的 HTTPS 网页"出现在分享面板里。在电脑上执行 `tailscale serve --bg 8720`（首次按提示在 tailscale.com 开启 HTTPS 证书），然后手机用 `https://mkk-98.tailb46f33.ts.net` 打开并添加到主屏幕即可。局域网地址的二维码仍可扫码记账，只是没有分享面板入口。
 
-> **邮件导入配置**（QQ 邮箱为例）：设置 → 账户 → 开启 IMAP/SMTP → 生成授权码；`.env` 填 `AUTO_IMPORT=1`、`MAIL_IMAP_HOST=imap.qq.com`、`MAIL_USER=你的邮箱`、`MAIL_PASS=授权码`。支付宝：我的 → 账单 → 邮件账单（可设每月自动发送）；微信：钱包 → 账单 → 下载账单 → 发送到邮箱（每月一次）。
+> **邮件配置（163 邮箱）**：网页版 → 设置 → POP3/SMTP/IMAP → 开启「IMAP/SMTP 服务」→ 设置「客户端授权密码」（**授权码不是登录密码**）。然后 `.env` 填：`AUTO_IMPORT=1`、`MAIL_CAPTURE=1`、`MAIL_IMAP_HOST=imap.163.com`、`MAIL_USER=你的163邮箱`、`MAIL_PASS=授权码`，发送通道同样填 `SMTP_HOST=smtp.163.com`、`SMTP_PORT=465`、`SMTP_USER/PASS=同上`、`MAIL_TO=你的邮箱`。QQ 邮箱同理（`imap.qq.com` / `smtp.qq.com`）。
+> 支付宝：我的 → 账单 → 邮件账单（可设每月自动发送）；微信：钱包 → 账单 → 下载账单 → 发送到邮箱（每月一次）。注意账单邮件可能被投进垃圾箱，若自动导入不到，把 `.env` 的 `MAIL_BOX` 改成垃圾邮件文件夹名。
 
 ## 安全
 
@@ -62,7 +63,7 @@
 2. **微信直推（可选）**：到 [sct.ftqq.com](https://sct.ftqq.com) 微信扫码登录拿 SendKey，填 `SERVERCHAN_KEY`，月报以微信服务号消息送达。
 3. 测试：设置页 →「月报提醒」→ 发送本月测试月报。
 
-> QQ 邮箱授权码：QQ 邮箱网页版 → 设置 → 账户 → 开启 IMAP/SMTP 服务 → 生成授权码（与账单导入的 `MAIL_PASS` 可共用同一个）。
+> 163 邮箱授权码：网页版 → 设置 → POP3/SMTP/IMAP → 开启服务 → 设置「客户端授权密码」（与账单导入/邮箱记账的 `MAIL_PASS` 可共用同一个）。QQ 邮箱同理（设置 → 账户 → 开启 IMAP/SMTP → 生成授权码）。
 
 ## 模型故障提示
 
