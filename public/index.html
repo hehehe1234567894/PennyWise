@@ -22,13 +22,17 @@
   <main>
     <section id="tab-capture">
       <h2>记一笔</h2>
-      <p class="hint">粘贴微信 / 支付宝 / 银行交易通知，或直接写一句话，如「买奶茶 13 元」</p>
+      <p class="hint">粘贴交易通知 / 点「选截图」识别支付截图 / 电脑上可直接 Ctrl+V 粘贴截图</p>
       <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
       <div class="btn-row">
         <button id="btn-paste" class="btn">粘贴</button>
+        <button id="btn-image" class="btn">选截图</button>
+      </div>
+      <div class="btn-row">
         <button id="btn-parse" class="btn btn-primary">解析入账</button>
         <button id="btn-manual" class="btn">手动记账</button>
       </div>
+      <input id="file-image" type="file" accept="image/*" hidden>
     </section>
 
     <section id="tab-pending" hidden>

@@ -184,6 +184,7 @@
         </label>
       </div>
       <label>商户 / 对方<input id="ed-merchant" type="text" placeholder="如：全家便利店"></label>
+      <label>商品 / 服务名称<input id="ed-goods" type="text" placeholder="如：冰美式咖啡（可选）"></label>
       <label id="ed-cat-wrap">分类<select id="ed-category"></select></label>
       <label>时间<input id="ed-ts" type="datetime-local"></label>
       <label>备注<input id="ed-note" type="text" placeholder="可选"></label>
@@ -216,9 +217,17 @@
         $('ed-category').value = opts.includes(tx.category) ? tx.category : (opts.includes('其他') ? '其他' : opts[0])
       }
       $('ed-merchant').value = tx.merchant || ''
+      $('ed-goods').value = tx.goods_name || ''
       $('ed-account').value = tx.account || 'other'
       if (tx.ts) $('ed-ts').value = toLocalInput(tx.ts)
       $('ed-note').value = tx.note || ''
+      if (tx.raw_image) {
+        const img = document.createElement('img')
+        img.className = 'ed-img'
+        img.src = '/api/image/' + encodeURIComponent(tx.raw_image)
+        img.alt = '截图'
+        $('ed-form').insertBefore(img, $('ed-form').querySelector('.btn-row'))
+      }
       if (tx.raw_text) {
         const r = $('ed-raw')
         r.textContent = '原文：' + tx.raw_text
@@ -260,6 +269,7 @@
       amount: Number($('ed-amount').value),
       direction: $('ed-direction').value,
       merchant: g('ed-merchant'),
+      goods_name: g('ed-goods'),
       account: $('ed-account').value,
       ts: fromLocalInput(g('ed-ts')) || new Date().toISOString(),
       note: g('ed-note'),
@@ -298,6 +308,57 @@
   })
 
   $('btn-manual').addEventListener('click', () => openEditor('manual', null))
+
+  // ---------- 截图采集 ----------
+  $('btn-image').addEventListener('click', () => $('file-image').click())
+  $('file-image').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (f) captureImage(f)
+  })
+  // 电脑上 Ctrl+V 直接粘贴截图
+  document.addEventListener('paste', (e) => {
+    if ($('modal').classList.contains('hidden') === false) return
+    const items = [...(e.clipboardData?.items || [])].filter((i) => i.type && i.type.startsWith('image/'))
+    if (items.length) {
+      e.preventDefault()
+      const f = items[0].getAsFile()
+      if (f) { toast('已粘贴截图，识别中…'); captureImage(f) }
+    }
+  })
+  // 拖拽图片到"记一笔"页
+  const dropZone = $('tab-capture')
+  dropZone.addEventListener('dragover', (e) => e.preventDefault())
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    const f = e.dataTransfer?.files?.[0]
+    if (f && f.type.startsWith('image/')) captureImage(f)
+  })
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(String(r.result).split(',')[1] || '')
+      r.onerror = () => reject(r.error)
+      r.readAsDataURL(file)
+    })
+  }
+
+  async function captureImage(file) {
+    const clientId = uuid()
+    try {
+      const b64 = await fileToBase64(file)
+      const data = await api('/api/capture-image', { method: 'POST', body: { image_base64: b64, mime: file.type || 'image/png', client_id: clientId } })
+      const { transaction, parse } = data
+      if (parse.code === 'ok') toast('识别完成，请确认')
+      else if (parse.code === 'duplicate') toast('这条已经存在')
+      else toast('识别失败（' + (parse.error || parse.code) + '），请手动填写')
+      openEditor('parse', transaction)
+      refreshAll()
+    } catch (e) {
+      toast('识别失败：' + e.message)
+    }
+  }
 
   async function capture(text) {
     const clientId = uuid()

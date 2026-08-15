@@ -49,6 +49,12 @@ for (const kind of Object.keys(DEFAULT_CATEGORIES)) {
   for (const name of DEFAULT_CATEGORIES[kind]) seed.run(name, kind)
 }
 
+// 轻量迁移：goods_name 列（v2 视觉解析的商品名）
+const cols = db.prepare('PRAGMA table_info(transactions)').all().map((r) => r.name)
+if (!cols.includes('goods_name')) {
+  db.exec("ALTER TABLE transactions ADD COLUMN goods_name TEXT NOT NULL DEFAULT ''")
+}
+
 export function getCategories() {
   const rows = db.prepare('SELECT name, kind FROM categories ORDER BY rowid').all()
   const out = { expense: [], income: [] }

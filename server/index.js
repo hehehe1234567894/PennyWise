@@ -1,19 +1,41 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth } from './db.js'
-import { parseCapture, llmConfig } from './llm.js'
+import { parseCapture, parseImage, llmConfig, visionConfig } from './llm.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
 
+const IMAGE_DIR = path.join(DATA_DIR, 'images')
+const IMAGE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/webp': 'webp' }
+
+function detectImage(buf) {
+  if (!buf || buf.length < 12) return null
+  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg'
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png'
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
+  if (buf[0] === 0x42 && buf[1] === 0x4d) return 'image/bmp'
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp'
+  return null
+}
+
+function saveImage(buf, mime) {
+  fs.mkdirSync(IMAGE_DIR, { recursive: true })
+  const ext = IMAGE_EXT[mime] || 'jpg'
+  const name = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`
+  fs.writeFileSync(path.join(IMAGE_DIR, name), buf)
+  return name // 相对文件名；通过 /api/image/:name 访问（随机名即访问凭证）
+}
+
 const app = express()
 app.disable('x-powered-by')
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '16mb' }))
 
 // ---- CORS：允许任何来源调用 API（安全性由 AUTH_TOKEN 保证）。
 // 手机端"连接检测"需要跨地址探测（如从 Tailscale 域名探测局域网 IP）。
@@ -44,7 +66,7 @@ const fail = (res, status, code, error) => res.status(status).json({ ok: false, 
 
 // ---- 基本信息 ----
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, time: nowIso(), hasLLM: llmConfig().enabled, model: llmConfig().model })
+  res.json({ ok: true, time: nowIso(), hasLLM: llmConfig().enabled, model: llmConfig().model, hasVision: visionConfig().enabled, visionModel: visionConfig().model })
 })
 
 // 扫描本机网卡：区分局域网与 Tailscale（100.x 前缀或网卡名）
@@ -190,6 +212,79 @@ app.post('/api/capture', async (req, res) => {
   res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
 })
 
+// ---- 采集：支付截图 → 视觉模型解析 → 待确认 ----
+// 支持两种形式：JSON base64（网页端）/ 原始图片字节（iOS 快捷指令等）
+app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application/json'), limit: '16mb' }), async (req, res) => {
+  let buf = null
+  let mime = 'image/jpeg'
+  let clientId = null
+  if (req.is('application/json')) {
+    let j
+    try { j = JSON.parse(req.body.toString('utf8')) } catch { return fail(res, 400, 'bad_request', 'JSON 解析失败') }
+    const b64 = String(j.image_base64 || j.image || '').replace(/^data:[^;]+;base64,/, '')
+    buf = Buffer.from(b64, 'base64')
+    mime = String(j.mime || 'image/jpeg')
+    clientId = j.client_id ? String(j.client_id).slice(0, 64) : null
+  } else {
+    buf = req.body
+    mime = (req.get('content-type') || '').split(';')[0].trim()
+    clientId = req.query.client_id ? String(req.query.client_id).slice(0, 64) : null
+  }
+  const real = detectImage(buf)
+  if (!real) return fail(res, 400, 'bad_request', '不支持的图片格式（支持 JPG/PNG/GIF/BMP/WebP）')
+  mime = real
+
+  if (clientId) {
+    const exist = db.prepare('SELECT * FROM transactions WHERE client_id = ?').get(clientId)
+    if (exist) return res.json({ ok: true, data: { transaction: exist, parse: { code: 'duplicate' } } })
+  }
+
+  const file = saveImage(buf, mime)
+  const result = await parseImage(buf, mime)
+  let fields = {
+    ts: nowIso(), amount: null, direction: 'expense', merchant: '',
+    goods_name: '', category: null, account: 'other', note: '', confidence: null,
+    raw_text: '', raw_image: file,
+  }
+  let parse = { code: 'no_key' }
+  if (result.ok) {
+    const d = result.data
+    parse = { code: 'ok', confidence: d.confidence }
+    fields = { ...fields, ts: d.ts || fields.ts, amount: d.amount, direction: d.direction, merchant: d.merchant, goods_name: d.goods_name, category: d.category, account: d.account, confidence: d.confidence, raw_text: d.raw_text }
+  } else {
+    parse = { code: result.code, error: result.error || '' }
+  }
+
+  // 规则记忆：同一商户自动套用历史分类
+  if (fields.merchant && fields.direction === 'expense') {
+    const rule = ruleFor(fields.merchant)
+    if (rule) {
+      fields.category = rule.category
+      if (typeof parse.confidence === 'number') parse.confidence = Math.min(1, parse.confidence + 0.1)
+    }
+  }
+
+  const info = db.prepare(`
+    INSERT INTO transactions (client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited)
+    VALUES (?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', 'pending', ?, ?, 0)
+  `).run(
+    clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
+    fields.direction === 'expense' ? (fields.category || '其他') : null,
+    fields.account, fields.raw_text, fields.raw_image, fields.confidence, fields.note,
+  )
+
+  res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
+})
+
+// 已保存的截图（随机文件名即访问凭证；配合 token 鉴权场景外的 <img> 使用）
+app.get('/api/image/:name', (req, res) => {
+  const name = String(req.params.name || '').replace(/[^a-zA-Z0-9._-]/g, '')
+  const file = path.join(IMAGE_DIR, name)
+  if (!name || !fs.existsSync(file)) return fail(res, 404, 'not_found', '图片不存在')
+  const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' }[path.extname(name).toLowerCase()] || 'image/jpeg'
+  res.set('Cache-Control', 'private, max-age=31536000').set('Content-Type', mime).send(fs.readFileSync(file))
+})
+
 // ---- 手动创建（直接确认入账） ----
 app.post('/api/transactions', (req, res) => {
   const b = req.body || {}
@@ -197,14 +292,15 @@ app.post('/api/transactions', (req, res) => {
   if (!Number.isFinite(amount) || amount <= 0) return fail(res, 400, 'bad_request', '金额必须为正数')
   const direction = DIRECTIONS.includes(b.direction) ? b.direction : 'expense'
   const merchant = typeof b.merchant === 'string' ? b.merchant.trim().slice(0, 120) : ''
+  const goodsName = typeof b.goods_name === 'string' ? b.goods_name.trim().slice(0, 120) : ''
   const category = direction === 'expense' ? normalizeCategory(b.category) || '其他' : null
   const account = ACCOUNTS.includes(b.account) ? b.account : 'other'
   const ts = validTs(b.ts) || nowIso()
   const note = typeof b.note === 'string' ? b.note.trim().slice(0, 200) : ''
   const info = db.prepare(`
-    INSERT INTO transactions (ts, created_at, amount, currency, direction, merchant, category, account, raw_text, source, status, note, edited)
-    VALUES (?, ?, ?, 'CNY', ?, ?, ?, ?, NULL, 'manual', 'confirmed', ?, 0)
-  `).run(ts, nowIso(), Math.round(amount * 100) / 100, direction, merchant, category, account, note)
+    INSERT INTO transactions (ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, source, status, note, edited)
+    VALUES (?, ?, ?, 'CNY', ?, ?, ?, ?, ?, NULL, 'manual', 'confirmed', ?, 0)
+  `).run(ts, nowIso(), Math.round(amount * 100) / 100, direction, merchant, goodsName, category, account, note)
   if (merchant && category) upsertRule(merchant, category)
   res.status(201).json({ ok: true, data: getTx(info.lastInsertRowid) })
 })
@@ -218,14 +314,15 @@ app.post('/api/transactions/:id/confirm', (req, res) => {
   if (!Number.isFinite(amount) || amount <= 0) return fail(res, 400, 'bad_request', '金额必须为正数')
   const direction = DIRECTIONS.includes(o.direction ?? tx.direction) ? (o.direction ?? tx.direction) : tx.direction
   const merchant = o.merchant !== undefined ? String(o.merchant).trim().slice(0, 120) : (tx.merchant || '')
+  const goodsName = o.goods_name !== undefined ? String(o.goods_name).trim().slice(0, 120) : (tx.goods_name || '')
   const category = direction === 'expense' ? normalizeCategory(o.category ?? tx.category) || '其他' : null
   const account = ACCOUNTS.includes(o.account ?? tx.account) ? (o.account ?? tx.account) : tx.account
   const ts = validTs(o.ts) || tx.ts
   const note = o.note !== undefined ? String(o.note).trim().slice(0, 200) : (tx.note || '')
   db.prepare(`
-    UPDATE transactions SET ts = ?, amount = ?, direction = ?, merchant = ?, category = ?, account = ?, note = ?, status = 'confirmed', edited = edited + 1
+    UPDATE transactions SET ts = ?, amount = ?, direction = ?, merchant = ?, goods_name = ?, category = ?, account = ?, note = ?, status = 'confirmed', edited = edited + 1
     WHERE id = ?
-  `).run(ts, Math.round(amount * 100) / 100, direction, merchant, category, account, note, tx.id)
+  `).run(ts, Math.round(amount * 100) / 100, direction, merchant, goodsName, category, account, note, tx.id)
   if (merchant && category) upsertRule(merchant, category)
   res.json({ ok: true, data: getTx(tx.id) })
 })
@@ -243,6 +340,7 @@ app.patch('/api/transactions/:id', (req, res) => {
   }
   if (b.direction !== undefined) patch.direction = DIRECTIONS.includes(b.direction) ? b.direction : tx.direction
   if (b.merchant !== undefined) patch.merchant = String(b.merchant).trim().slice(0, 120)
+  if (b.goods_name !== undefined) patch.goods_name = String(b.goods_name).trim().slice(0, 120)
   if (b.category !== undefined) {
     patch.category = (patch.direction ?? tx.direction) === 'expense' ? normalizeCategory(b.category) || '其他' : null
   }

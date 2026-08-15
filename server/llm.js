@@ -82,3 +82,88 @@ function sanitize(d) {
     confidence: Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : 0.5,
   }
 }
+
+// ================= 视觉解析（v2：支付截图 → 结构化） =================
+
+export function visionConfig() {
+  const base = env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '')
+  const apiKey = env('VISION_API_KEY')
+  const model = env('VISION_MODEL', 'qwen-vl-plus')
+  return { base, apiKey, model, enabled: Boolean(apiKey) }
+}
+
+const VISION_SYSTEM_PROMPT = `你是"PennyWise"记账系统的支付截图解析器。用户会给你微信/支付宝/银行 App 的支付成功页、账单详情或收银小票截图。你只输出一个 JSON 对象，不要输出任何解释、代码块标记或多余文字。
+
+字段说明：
+- amount: 实付金额（number，正数，最多两位小数）。只取实际扣款金额，忽略余额、优惠券、原价；无法确定填 null
+- direction: "expense"(支出) | "income"(收入) | "refund"(退款) | "transfer"(转账)。支付成功页/账单扣款默认 "expense"；收款到账/入账类页面 "income"；明确退款 "refund"
+- merchant: 商户名，去掉"收款方""商户""向"等前缀文字，只保留名称；找不到填 ""
+- goods_name: 购买的商品或服务名称（如"冰美式咖啡""地铁单程票"）；没有具体商品填 ""
+- category: 从 [餐饮, 交通, 购物, 娱乐, 学习, 日用品, 医疗, 通讯, 住宿, 运动, 生活缴费, 人情, 其他] 中选一个最合适的；收入/退款/转账类填 null；不确定填 "其他"
+- account: "wechat" | "alipay" | "bank" | "cash" | "other"。按截图特征判断：绿色界面多为微信支付、蓝色多为支付宝、银行 App/短信样式为 bank；无法判断填 "other"
+- ts: 交易时间，ISO8601 格式（如 2025-06-01T12:30:00+08:00）；截图没有时间信息时填 null
+- raw_text: 截图中完整可见的文字，原样转录（用于审计和搜索）
+- confidence: 0 到 1 之间的置信度，表示你对整体解析结果的把握
+
+输出必须是一个合法的 JSON 对象，只包含上述字段。`
+
+export async function parseImage(buffer, mime, { timeoutMs = 90000 } = {}) {
+  const cfg = visionConfig()
+  if (!cfg.enabled) return { ok: false, code: 'no_key', error: '未配置 VISION_API_KEY，无法识别截图' }
+  const dataUrl = `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}`
+  const body = {
+    model: cfg.model,
+    messages: [
+      { role: 'system', content: VISION_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: dataUrl } },
+          { type: 'text', text: '解析这张支付截图，提取结构化信息。' },
+        ],
+      },
+    ],
+    temperature: 0.01,
+    response_format: { type: 'json_object' },
+  }
+  try {
+    const res = await fetch(`${cfg.base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      return { ok: false, code: `http_${res.status}`, error: t.slice(0, 300) }
+    }
+    const json = await res.json()
+    let content = json?.choices?.[0]?.message?.content ?? ''
+    content = String(content).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    return { ok: true, data: sanitizeVision(JSON.parse(content)) }
+  } catch (e) {
+    return { ok: false, code: 'network', error: String(e?.message || e).slice(0, 300) }
+  }
+}
+
+function sanitizeVision(d) {
+  const amt = Number(d?.amount)
+  const conf = Number(d?.confidence)
+  let ts = null
+  if (typeof d?.ts === 'string') {
+    let t = d.ts.trim()
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t)) t = t.replace(' ', 'T')
+    if (/^\d{4}-\d{2}-\d{2}/.test(t) && !Number.isNaN(Date.parse(t))) ts = new Date(t).toISOString()
+  }
+  return {
+    amount: Number.isFinite(amt) && amt > 0 ? Math.round(amt * 100) / 100 : null,
+    direction: ['expense', 'income', 'refund', 'transfer'].includes(d?.direction) ? d.direction : 'expense',
+    merchant: typeof d?.merchant === 'string' ? d.merchant.trim().slice(0, 120) : '',
+    goods_name: typeof d?.goods_name === 'string' ? d.goods_name.trim().slice(0, 120) : '',
+    category: typeof d?.category === 'string' ? d.category.trim().slice(0, 20) : null,
+    account: ['wechat', 'alipay', 'bank', 'cash', 'other'].includes(d?.account) ? d.account : 'other',
+    ts,
+    raw_text: typeof d?.raw_text === 'string' ? d.raw_text.trim().slice(0, 2000) : '',
+    confidence: Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : 0.5,
+  }
+}

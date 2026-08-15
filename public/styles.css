@@ -133,6 +133,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; 
   font-size: 12px; color: var(--dim); max-height: 80px; overflow-y: auto;
   white-space: pre-wrap; word-break: break-all;
 }
+.ed-img { width: 100%; border-radius: 10px; margin-top: 10px; border: 1px solid var(--border); }
 .toast {
   position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); z-index: 99;
   background: #242a35; border: 1px solid var(--border); color: var(--text);
