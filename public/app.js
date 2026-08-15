@@ -18,23 +18,97 @@
     return (crypto.randomUUID && crypto.randomUUID()) || 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
   }
 
+  // ---------- 连接管理：探测可用端点，优先局域网 ----------
+  let endpoints = []        // {url, kind:'lan'|'tailscale'|'current', ok, ms}
+  let activeEndpoint = null // 当前选中的端点
+  let apiBase = ''          // 空 = 同源请求
+
+  async function probeUrl(url) {
+    const ctrl = new AbortController()
+    const to = setTimeout(() => ctrl.abort(), 2500)
+    const t0 = performance.now()
+    try {
+      const r = await fetch(url + '/api/reachability', { signal: ctrl.signal })
+      clearTimeout(to)
+      if (!r.ok) return null
+      const j = await r.json().catch(() => null)
+      if (!j || !j.ok) return null
+      return { data: j, ms: Math.round(performance.now() - t0) }
+    } catch (e) { clearTimeout(to); return null }
+  }
+
+  function sameScheme(u) {
+    try { return new URL(u).protocol === location.protocol } catch { return false }
+  }
+
+  async function refreshEndpoints() {
+    const cur = location.origin
+    let info = null
+    try { info = await probeUrl(cur) } catch { /* 服务器不可达，稍后仍用当前地址兜底 */ }
+    // 候选地址：当前地址 + 服务器自报的局域网/Tailscale 地址
+    const cands = [{ url: cur, kind: 'current' }]
+    if (info?.data) {
+      for (const x of info.data.lan || []) cands.push({ url: `http://${x.ip}:${info.data.port}`, kind: 'lan' })
+      for (const x of info.data.tailscale || []) cands.push({ url: `http://${x.ip}:${info.data.port}`, kind: 'tailscale' })
+      if (info.data.tsName) cands.push({ url: `https://${info.data.tsName}`, kind: 'tailscale' })
+    }
+    // 去重
+    const seen = new Set()
+    const uniq = []
+    for (const c of cands) {
+      if (seen.has(c.url)) continue
+      seen.add(c.url)
+      uniq.push(c)
+    }
+    // 并发探测。跨 scheme 的地址浏览器会以混合内容拦截，只列不测（ok=null）
+    endpoints = await Promise.all(uniq.map(async (c) => {
+      if (!sameScheme(c.url)) return { ...c, ok: null, ms: null }
+      const r = await probeUrl(c.url)
+      return { ...c, ok: !!r, ms: r ? r.ms : null }
+    }))
+    // 选择优先级：局域网直连 → 当前地址 → 延迟最低者
+    const reach = endpoints.filter((e) => e.ok)
+    const pick = reach.find((e) => e.kind === 'lan')
+      || reach.find((e) => e.url === cur)
+      || reach.slice().sort((a, b) => a.ms - b.ms)[0]
+      || null
+    activeEndpoint = pick
+    apiBase = pick && pick.url !== cur ? pick.url : ''
+    updateChip()
+    renderConnPanel()
+    return pick
+  }
+
   // ---------- 网络层 ----------
   async function api(path, opts = {}) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {})
     if (token) headers['X-Auth-Token'] = token
-    let res
+    const doFetch = async (base) => {
+      let res
+      try {
+        res = await fetch(base + path, Object.assign({}, opts, { headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined }))
+      } catch (e) {
+        const err = new Error('network'); err.code = 'network'; throw err
+      }
+      if (res.status === 401) {
+        if (!$('set-save')) showSettings()
+        const err = new Error('token'); err.code = 'token'; throw err
+      }
+      const j = await res.json().catch(() => ({ ok: false, error: '响应解析失败' }))
+      if (!j.ok) { const err = new Error(j.error || '请求失败'); err.code = 'api'; throw err }
+      return j.data
+    }
     try {
-      res = await fetch(path, Object.assign({}, opts, { headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined }))
+      return await doFetch(apiBase || '')
     } catch (e) {
-      throw new Error('网络不可用，稍后重试')
+      if (e.code === 'network' && !opts._retried) {
+        await refreshEndpoints() // 重探测并切换可用端点后重试一次
+        return doFetch(apiBase || '')
+      }
+      if (e.code === 'token') throw new Error('访问令牌无效，请在设置中填写')
+      if (e.code === 'network') throw new Error('网络不可用，稍后重试')
+      throw e
     }
-    if (res.status === 401) {
-      if (!$('set-save')) showSettings()
-      throw new Error('访问令牌无效，请在设置中填写')
-    }
-    const j = await res.json().catch(() => ({ ok: false, error: '响应解析失败' }))
-    if (!j.ok) throw new Error(j.error || '请求失败')
-    return j.data
   }
 
   // ---------- UI 基础 ----------
@@ -366,7 +440,13 @@
         <button type="button" class="btn" data-close>关闭</button>
         <button type="button" class="btn btn-primary" id="set-save">保存并测试</button>
       </div>
-      <p id="set-status" class="hint"></p>`)
+      <p id="set-status" class="hint"></p>
+      <h3>连接</h3>
+      <p class="hint">自动检测可用地址，优先局域网直连；在家点"打开"切换到局域网地址更快，校园网会自动走 Tailscale。</p>
+      <div id="conn-panel" class="conn-panel"></div>
+      <div class="btn-row">
+        <button type="button" class="btn" id="set-reprobe">重新检测</button>
+      </div>`)
     $('set-token').value = token
     $('set-save').addEventListener('click', async () => {
       token = $('set-token').value.trim()
@@ -378,6 +458,14 @@
         $('set-status').textContent = '✗ 连接失败：' + e.message
       }
     })
+    $('set-reprobe').addEventListener('click', async () => {
+      renderConnPanel()
+      const el = $('conn-panel')
+      el.innerHTML = '<p class="hint">检测中…</p>'
+      const pick = await refreshEndpoints().catch(() => null)
+      if (!pick) el.innerHTML = '<p class="hint">所有地址都不可达，请检查电脑是否开机、服务是否启动</p>'
+    })
+    renderConnPanel()
   }
   $('btn-settings').addEventListener('click', showSettings)
 
@@ -440,16 +528,48 @@
       chip.textContent = '离线'; chip.className = 'chip chip-off'
     } else if (n) {
       chip.textContent = `待同步 ${n}`; chip.className = 'chip chip-warn'
+    } else if (activeEndpoint) {
+      const label = activeEndpoint.kind === 'lan' ? '局域网直连'
+        : activeEndpoint.kind === 'tailscale' ? 'Tailscale' : '在线'
+      chip.textContent = label
+      chip.className = 'chip chip-ok'
     } else {
       chip.textContent = '在线'; chip.className = 'chip chip-ok'
     }
     chip.classList.remove('hidden')
   }
-  window.addEventListener('online', () => { updateChip(); syncOutbox() })
+
+  function renderConnPanel() {
+    const el = $('conn-panel')
+    if (!el) return
+    if (!endpoints.length) { el.innerHTML = '<p class="hint">检测中…</p>'; return }
+    el.innerHTML = endpoints.map((e) => {
+      const status = e.ok === true ? `<span class="ok">✓ 可达 ${e.ms}ms</span>`
+        : e.ok === false ? '<span class="bad">✗ 不可达</span>'
+        : '<span class="dim">— 浏览器不允许跨协议探测</span>'
+      const kindLabel = e.kind === 'lan' ? '局域网' : e.kind === 'tailscale' ? 'Tailscale' : '当前地址'
+      const active = activeEndpoint && e.url === activeEndpoint.url ? '<span class="ok">● 使用中</span>' : ''
+      const openLink = e.url !== location.origin
+        ? ` <a class="link" href="${esc(e.url)}#pw-token=${encodeURIComponent(token)}">打开</a>` : ''
+      return `<div class="conn-row">
+        <div class="conn-url">${esc(e.url)}</div>
+        <div class="conn-sub">${kindLabel} ${active} ${status}${openLink}</div>
+      </div>`
+    }).join('')
+  }
+
+  window.addEventListener('online', () => { updateChip(); syncOutbox(); refreshEndpoints().catch(() => {}) })
   window.addEventListener('offline', updateChip)
 
   // ---------- 初始化 ----------
   async function init() {
+    // 从"打开"链接带来的令牌（跨地址切换时免重新输入）
+    const frag = location.hash.match(/pw-token=([^&]+)/)
+    if (frag) {
+      token = decodeURIComponent(frag[1])
+      localStorage.setItem(TOKEN_KEY, token)
+      history.replaceState(null, '', location.pathname + location.search)
+    }
     $('list-month').value = localMonth()
     $('stats-month').value = localMonth()
     $('list-month').addEventListener('change', renderList)
@@ -459,12 +579,14 @@
     $('modal').addEventListener('click', (e) => {
       if (e.target === $('modal') || e.target.closest('[data-close]')) closeModal()
     })
+    refreshEndpoints().catch(() => {})
     try { categories = await api('/api/categories') } catch (e) { /* token 未配置，稍后在设置里再试 */ }
     const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => ({ ok: true, tokenRequired: false, hasLLM: false }))
     if (cfg.tokenRequired && !token) showSettings()
     updateChip()
     syncOutbox()
     setInterval(syncOutbox, 30000)
+    setInterval(() => { refreshEndpoints().catch(() => {}) }, 60000)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
   }
   init()

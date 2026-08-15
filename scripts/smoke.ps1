@@ -89,7 +89,16 @@ foreach ($p in '/', '/app.js', '/styles.css', '/sw.js', '/manifest.webmanifest',
   Check "static $p" ($null -ne $r -and $r.StatusCode -eq 200)
 }
 
-# 10. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
+# 10. reachability & CORS (connection probing endpoints, public)
+$rc = Invoke-RestMethod -Uri "$base/api/reachability"
+Check 'reachability endpoint' ($rc.ok -eq $true -and $rc.port -eq 8720)
+Check 'reachability lists addresses' (($rc.lan.Count + $rc.tailscale.Count) -ge 1)
+$cors = curl.exe -s -i -H 'Origin: http://example.com' "$base/api/reachability" | Select-String 'Access-Control-Allow-Origin'
+Check 'CORS allow-origin header' ($null -ne $cors)
+$pre = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H 'Origin: http://example.com' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
+Check 'CORS preflight returns 204' ($pre -eq '204')
+
+# 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null
 Call DELETE "/api/transactions/$dupId" | Out-Null
 Call DELETE '/api/categories/Dining' | Out-Null

@@ -12,10 +12,22 @@ const app = express()
 app.disable('x-powered-by')
 app.use(express.json({ limit: '2mb' }))
 
-// ---- 鉴权：/api 下除 config/health 外都要求 X-Auth-Token ----
+// ---- CORS：允许任何来源调用 API（安全性由 AUTH_TOKEN 保证）。
+// 手机端"连接检测"需要跨地址探测（如从 Tailscale 域名探测局域网 IP）。
+// 必须在鉴权之前挂载，让 OPTIONS 预检直接返回 204。 ----
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', req.get('origin') || '*')
+  res.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+  res.set('Access-Control-Allow-Headers', 'Content-Type,X-Auth-Token')
+  res.set('Access-Control-Max-Age', '86400')
+  if (req.method === 'OPTIONS') return res.sendStatus(204)
+  next()
+})
+
+// ---- 鉴权：/api 下除 config/health/reachability 外都要求 X-Auth-Token ----
 app.use('/api', (req, res, next) => {
   if (!AUTH_TOKEN) return next()
-  if (req.path === '/config' || req.path === '/health') return next()
+  if (req.path === '/config' || req.path === '/health' || req.path === '/reachability') return next()
   if (req.get('x-auth-token') === AUTH_TOKEN) return next()
   return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请在设置中填写 AUTH_TOKEN' })
 })
@@ -25,6 +37,30 @@ const fail = (res, status, code, error) => res.status(status).json({ ok: false, 
 // ---- 基本信息 ----
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: nowIso(), hasLLM: llmConfig().enabled, model: llmConfig().model })
+})
+
+// 可达性自报：手机端"连接检测"据此探测哪个地址可用（公开，无需 token）
+app.get('/api/reachability', (req, res) => {
+  const nets = os.networkInterfaces()
+  const lan = []
+  const tailscale = []
+  for (const iface of Object.keys(nets)) {
+    for (const n of nets[iface] || []) {
+      if (n.family !== 'IPv4' || n.internal) continue
+      const isTs = iface.toLowerCase().includes('tailscale') || n.address.startsWith('100.')
+      if (isTs) tailscale.push({ ip: n.address, iface })
+      else lan.push({ ip: n.address, iface })
+    }
+  }
+  res.json({
+    ok: true,
+    port: PORT,
+    hostname: os.hostname(),
+    lan,
+    tailscale,
+    tsName: env('TAILSCALE_NAME', '').replace(/\/+$/, ''),
+    time: nowIso(),
+  })
 })
 app.get('/api/config', (req, res) => {
   res.json({ ok: true, tokenRequired: Boolean(AUTH_TOKEN), hasLLM: llmConfig().enabled })

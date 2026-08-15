@@ -139,3 +139,11 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; 
   padding: 10px 18px; border-radius: 999px; font-size: 14px; max-width: 90vw;
   box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
+.conn-panel { margin: 4px 0 8px; }
+.conn-row { background: var(--card2); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; }
+.conn-url { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
+.conn-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.conn-sub .ok { color: var(--green); }
+.conn-sub .bad { color: var(--red); }
+.conn-sub .dim { color: var(--dim); }
+.link { color: var(--accent); margin-left: 8px; text-decoration: none; }
