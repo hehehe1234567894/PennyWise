@@ -37,6 +37,15 @@ const app = express()
 app.disable('x-powered-by')
 app.use(express.json({ limit: '16mb' }))
 
+// ---- 安全响应头 ----
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff')
+  res.set('X-Frame-Options', 'DENY')
+  res.set('Referrer-Policy', 'no-referrer')
+  res.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src *; object-src 'none'; base-uri 'self'")
+  next()
+})
+
 // ---- CORS：允许任何来源调用 API（安全性由 AUTH_TOKEN 保证）。
 // 手机端"连接检测"需要跨地址探测（如从 Tailscale 域名探测局域网 IP）。
 // 必须在鉴权之前挂载，让 OPTIONS 预检直接返回 204。 ----

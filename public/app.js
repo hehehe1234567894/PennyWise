@@ -673,16 +673,63 @@
   window.addEventListener('online', () => { updateChip(); syncOutbox(); refreshEndpoints().catch(() => {}) })
   window.addEventListener('offline', updateChip)
 
-  // ---------- 初始化 ----------
-  async function init() {
-    // 从"打开"链接带来的令牌（跨地址切换 / 扫码配对，免重新输入）
-    const frag = location.hash.match(/pw-token=([^&]+)/)
-    if (frag) {
-      token = decodeURIComponent(frag[1])
+  // ---------- 锁定屏 ----------
+  function showLock() {
+    $('lock-screen').classList.remove('hidden')
+    $('lock-token').focus()
+  }
+  function hideLock() {
+    $('lock-screen').classList.add('hidden')
+  }
+  $('lock-btn').addEventListener('click', async () => {
+    const t = $('lock-token').value.trim()
+    if (!t) return
+    try {
+      const r = await fetch('/api/health', { headers: { 'X-Auth-Token': t } })
+      if (!r.ok) throw new Error('bad')
+      token = t
       localStorage.setItem(TOKEN_KEY, token)
-      history.replaceState(null, '', location.pathname + location.search)
-      setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
+      $('lock-token').value = ''
+      $('lock-status').textContent = ''
+      hideLock()
+      bootApp()
+    } catch (e) {
+      $('lock-status').textContent = '✗ 令牌无效，请检查后重试'
     }
+  })
+
+  // 启动前验证：有效令牌 → 进入；本机直连（电脑端）→ 免令牌进入；否则锁定
+  async function ensureUnlocked() {
+    if (token) {
+      const r = await fetch('/api/health', { headers: { 'X-Auth-Token': token } }).catch(() => null)
+      if (r && r.ok) return bootApp()
+      if (r && r.status === 401) {
+        // 存储的令牌失效：试试本机免令牌（电脑端换了令牌的情况）
+        const r2 = await fetch('/api/health').catch(() => null)
+        if (r2 && r2.ok) return bootApp()
+        token = ''
+        localStorage.removeItem(TOKEN_KEY)
+        return showLock()
+      }
+      // 网络完全不可用：有令牌先进入离线模式（采集走离线队列）
+      if (!r) return bootApp()
+      return showLock()
+    }
+    // 无存储令牌：本机直连免令牌，否则锁定
+    const r = await fetch('/api/health').catch(() => null)
+    if (r && r.ok) return bootApp()
+    return showLock()
+  }
+
+  let booted = false
+  function bootApp() {
+    if (booted) return
+    booted = true
+    initApp()
+  }
+
+  // 应用正式启动（已通过解锁验证）
+  async function initApp() {
     $('list-month').value = localMonth()
     $('stats-month').value = localMonth()
     $('list-month').addEventListener('change', renderList)
@@ -693,14 +740,25 @@
       if (e.target === $('modal') || e.target.closest('[data-close]')) closeModal()
     })
     refreshEndpoints().catch(() => {})
-    try { categories = await api('/api/categories') } catch (e) { /* token 未配置，稍后在设置里再试 */ }
-    const cfg = await fetch('/api/config').then((r) => r.json()).catch(() => ({ ok: true, tokenRequired: false, hasLLM: false }))
-    if (cfg.tokenRequired && !token) showSettings()
+    try { categories = await api('/api/categories') } catch (e) { /* 网络或令牌问题，稍后再试 */ }
     updateChip()
     syncOutbox()
     setInterval(syncOutbox, 30000)
     setInterval(() => { refreshEndpoints().catch(() => {}) }, 60000)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+  }
+
+  // ---------- 初始化 ----------
+  async function init() {
+    // 从"打开"/扫码链接带来的令牌（免重新输入）
+    const frag = location.hash.match(/pw-token=([^&]+)/)
+    if (frag) {
+      token = decodeURIComponent(frag[1])
+      localStorage.setItem(TOKEN_KEY, token)
+      history.replaceState(null, '', location.pathname + location.search)
+      setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
+    }
+    ensureUnlocked()
   }
   init()
 })()

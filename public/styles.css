@@ -134,6 +134,12 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; 
   white-space: pre-wrap; word-break: break-all;
 }
 .ed-img { width: 100%; border-radius: 10px; margin-top: 10px; border: 1px solid var(--border); }
+.lock { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lock-card { width: 100%; max-width: 380px; text-align: center; }
+.lock-logo { font-size: 44px; }
+.lock-card h2 { font-size: 18px; margin: 8px 0 4px; }
+.lock-card input { margin-top: 12px; }
+.lock-card .btn { margin-top: 12px; width: 100%; flex: none; }
 .toast {
   position: fixed; left: 50%; bottom: 88px; transform: translateX(-50%); z-index: 99;
   background: #242a35; border: 1px solid var(--border); color: var(--text);

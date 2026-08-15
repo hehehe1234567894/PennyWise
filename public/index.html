@@ -74,6 +74,18 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <div id="lock-screen" class="lock hidden">
+    <div class="lock-card">
+      <div class="lock-logo">🔒</div>
+      <h2>PennyWise 已锁定</h2>
+      <p class="hint">输入访问令牌解锁。令牌在你的电脑 <code>.env</code> 文件里；或直接在电脑设置页用手机相机扫二维码登录。</p>
+      <input id="lock-token" type="password" placeholder="访问令牌" autocomplete="off">
+      <button id="lock-btn" class="btn btn-primary">解锁</button>
+      <p id="lock-status" class="hint"></p>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

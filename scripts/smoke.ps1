@@ -52,6 +52,10 @@ Check 'qr endpoint returns svg' ($qr.StatusCode -eq 200 -and $qr.Content -match 
 $ci = Call GET '/api/connect-info' -withToken $false
 Check 'connect-info available on localhost without token' ($ci.ok -and $ci.data.token -eq $token)
 
+# 1d. security headers
+$sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Content-Type-Options|X-Frame-Options'
+Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
+
 # 2. auth (from a non-local address: this machine's LAN IP)
 $extBase = "http://$($rc.lan[0].ip):8720"
 Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $extBase) -eq 401)
