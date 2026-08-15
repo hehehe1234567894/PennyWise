@@ -8,6 +8,7 @@ import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseCapture, parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
 import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv } from './importer.js'
+import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport } from './reporter.js'
 import { shortcutFile } from './shortcut.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
@@ -293,6 +294,35 @@ app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb'
   if (parsed.error) return fail(res, 400, 'parse_error', parsed.error)
   res.json({ ok: true, data: await importBillRows(parsed.rows) })
 })
+
+// ---- 月度报告（邮箱 / Server酱 微信推送） ----
+app.get('/api/report/preview', (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  const s = summarizeMonth(month)
+  res.json({ ok: true, data: { text: buildReportText(s), channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
+})
+
+app.post('/api/report', async (req, res) => {
+  const month = typeof req.body?.month === 'string' && /^\d{4}-\d{2}$/.test(req.body.month) ? req.body.month : currentMonth()
+  if (!mailerConfig().enabled && !serverChanKey()) {
+    return fail(res, 400, 'not_configured', '未配置任何发送渠道（SMTP_* 或 SERVERCHAN_KEY），见 README「月报提醒」')
+  }
+  const r = await sendMonthlyReport(month)
+  res.json({ ok: true, data: { month, channels: r.channels } })
+})
+
+// 每月 1 日 REPORT_HOUR 点自动发送上月报告（用 meta 表防重复）
+async function checkMonthlyReport() {
+  const d = new Date()
+  if (d.getDate() !== Number(env('REPORT_DAY', '1')) || d.getHours() !== Number(env('REPORT_HOUR', '9'))) return
+  if (!mailerConfig().enabled && !serverChanKey()) return
+  const prev = new Date(d.getFullYear(), d.getMonth() - 1, 1)
+  const key = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`
+  const sent = db.prepare("SELECT v FROM meta WHERE k = 'last_report_month'").get()?.v
+  if (sent === key) return
+  await sendMonthlyReport(key)
+  db.prepare("INSERT INTO meta (k, v) VALUES ('last_report_month', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(key)
+}
 
 // ---- iOS 快捷指令下载（银行短信自动记账） ----
 app.get('/shortcut', (req, res) => {
@@ -643,6 +673,8 @@ app.listen(PORT, '0.0.0.0', () => {
     setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
   }
+  // 月度报告：每 30 分钟检查一次是否到发送时刻
+  setInterval(() => { checkMonthlyReport().catch(() => {}) }, 30 * 60 * 1000)
   console.log('')
   console.log('  PennyWise 已启动')
   console.log(`  本机访问:   http://localhost:${PORT}`)

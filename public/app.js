@@ -622,6 +622,12 @@
         <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
       </div>
       <p id="set-import-status" class="hint"></p>
+      <h3>月报提醒</h3>
+      <p class="hint">每月 1 日自动把上月汇总发到邮箱（绑定微信「QQ邮箱提醒」即可在微信里收到；可加 Server酱 直推微信，见 README）。</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="set-report">发送本月测试月报</button>
+      </div>
+      <p id="set-report-status" class="hint"></p>
       <h3>连接</h3>
       <p class="hint">自动检测可用地址，优先局域网直连；在家点"打开"切换到局域网地址更快，校园网会自动走 Tailscale。</p>
       <div id="conn-panel" class="conn-panel"></div>
@@ -678,6 +684,18 @@
         const d = await api('/api/import-bills', { method: 'POST' })
         st.textContent = `✓ 完成：新导入 ${d.imported} 条，跳过重复 ${d.skipped} 条${d.error ? '（' + d.error + '）' : ''}`
         refreshAll()
+      } catch (e) {
+        st.textContent = '✗ ' + e.message
+      }
+    })
+    $('set-report').addEventListener('click', async () => {
+      const st = $('set-report-status')
+      st.textContent = '发送中…'
+      try {
+        const d = await api('/api/report', { method: 'POST' })
+        const ok = d.channels.filter((c) => c.ok).map((c) => c.name)
+        const bad = d.channels.filter((c) => !c.ok)
+        st.textContent = ok.length ? `✓ 已通过 ${ok.join(' / ')} 发送` + (bad.length ? `；${bad.length} 个渠道失败：${bad.map((c) => c.error).join('；')}` : '') : '✗ 发送失败：' + bad.map((c) => c.error).join('；')
       } catch (e) {
         st.textContent = '✗ ' + e.message
       }

@@ -69,6 +69,8 @@ $smsj = (curl.exe -s -X POST -H "X-Auth-Token: $token" -H 'Content-Type: text/pl
 Check 'sms junk silently skipped' ($smsj.ok -and $smsj.data.skipped -eq $true)
 $scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut"
 Check 'shortcut file downloadable' ($scCode -eq '200')
+$rp = Call GET '/api/report/preview'
+Check 'report preview builds' ($rp.ok -and $null -ne $rp.data.text -and $rp.data.text.Length -gt 20)
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }
