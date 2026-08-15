@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>PennyWise 记账</title>
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>PennyWise</h1>
+    <div class="topbar-right">
+      <span id="net-chip" class="chip chip-ok hidden">在线</span>
+      <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-capture">
+      <h2>记一笔</h2>
+      <p class="hint">粘贴微信 / 支付宝 / 银行交易通知，或直接写一句话，如「买奶茶 13 元」</p>
+      <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
+      <div class="btn-row">
+        <button id="btn-paste" class="btn">粘贴</button>
+        <button id="btn-parse" class="btn btn-primary">解析入账</button>
+        <button id="btn-manual" class="btn">手动记账</button>
+      </div>
+    </section>
+
+    <section id="tab-pending" hidden>
+      <div class="section-head"><h2>待处理</h2><span id="pending-count" class="chip"></span></div>
+      <div id="pending-list"></div>
+      <p id="pending-empty" class="empty hidden">没有待确认的记录 🎉</p>
+    </section>
+
+    <section id="tab-list" hidden>
+      <div class="filters">
+        <input id="list-month" type="month">
+        <input id="list-q" type="search" placeholder="搜索商户 / 备注">
+      </div>
+      <div id="list-summary" class="sum-row"></div>
+      <div id="list-items"></div>
+      <p id="list-empty" class="empty hidden">这个月还没有记录</p>
+    </section>
+
+    <section id="tab-stats" hidden>
+      <input id="stats-month" type="month" class="month-input">
+      <div id="stats-cards" class="stats-cards"></div>
+      <h3>支出分类</h3>
+      <div id="stats-cats"></div>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="capture">记一笔</button>
+    <button class="tab" data-tab="pending">待处理</button>
+    <button class="tab" data-tab="list">流水</button>
+    <button class="tab" data-tab="stats">统计</button>
+  </nav>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><span id="modal-title"></span><button class="icon-btn" data-close>✕</button></div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

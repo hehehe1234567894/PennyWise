@@ -1,0 +1,91 @@
+# PennyWise smoke test (ASCII-only so it runs under Windows PowerShell 5.1)
+#
+# Run after the server is up:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1
+# Reads AUTH_TOKEN from .env, walks health/auth/capture/confirm/idempotency/
+# manual-create/patch/delete/list/summary/static assets. Exit code 0 = all pass.
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$base = 'http://127.0.0.1:8720'
+$token = ''
+Get-Content (Join-Path $root '.env') | ForEach-Object {
+  if ($_ -match '^AUTH_TOKEN=(.+)$') { $token = $Matches[1].Trim('"').Trim("'") }
+}
+if (-not $token) { Write-Host 'FAIL: no AUTH_TOKEN found in .env'; exit 1 }
+
+$pass = 0; $fail = 0
+function Check($name, $cond, $detail = '') {
+  if ($cond) { $script:pass++; Write-Host "PASS  $name" -ForegroundColor Green }
+  else { $script:fail++; Write-Host "FAIL  $name $detail" -ForegroundColor Red }
+}
+function Call($method, $path, $body = $null, $withToken = $true) {
+  $p = @{ Method = $method; Uri = "$base$path" }
+  if ($withToken) { $p.Headers = @{ 'X-Auth-Token' = $token } }
+  if ($null -ne $body) { $p.ContentType = 'application/json'; $p.Body = ($body | ConvertTo-Json -Compress -Depth 8) }
+  Invoke-RestMethod @p
+}
+function StatusOf($method, $path, $body = $null) {
+  try {
+    $r = Invoke-WebRequest -Method $method -Uri "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
+    return $r.StatusCode
+  } catch { return [int]$_.Exception.Response.StatusCode.value__ }
+}
+
+# 1. public endpoints
+$h = Call GET '/api/health' -withToken $false
+Check 'health endpoint' ($h.ok -eq $true)
+Check 'config says token required' ((Call GET '/api/config' -withToken $false).tokenRequired -eq $true)
+
+# 2. auth
+Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' }) -eq 401)
+Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 }) -eq 401)
+
+# 3. capture (no LLM key -> manual-confirm mode)
+$c = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-1-$([guid]::NewGuid())" }
+Check 'capture creates pending' ($c.ok -and $c.data.transaction.status -eq 'pending')
+Check 'capture returns parse state' ($null -ne $c.data.parse.code)
+$txId = $c.data.transaction.id
+
+# 4. idempotency via client_id (offline outbox retry must not duplicate)
+$dup = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-dup-$([guid]::NewGuid())" }
+$dup2 = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = $dup.data.transaction.client_id }
+Check 'outbox retry is idempotent' ($dup2.data.parse.code -eq 'duplicate')
+
+# 5. register a custom category (also exercises the categories API)
+$cat = Call POST '/api/categories' @{ name = 'Dining'; kind = 'expense' }
+Check 'register custom category' ($cat.ok -and $cat.data.expense -contains 'Dining')
+
+# 6. confirm with overrides
+$cf = Call POST "/api/transactions/$txId/confirm" @{ overrides = @{ amount = 18.5; direction = 'expense'; merchant = 'FamilyMart'; category = 'Dining'; account = 'wechat'; note = 'smoke' } }
+Check 'confirm with overrides' ($cf.ok -and $cf.data.status -eq 'confirmed' -and $cf.data.amount -eq 18.5)
+Check 'confirm learns merchant rule' ($cf.ok -and $cf.data.category -eq 'Dining')
+
+# 6. manual income + patch + delete
+$m = Call POST '/api/transactions' @{ amount = 200; direction = 'income'; merchant = 'Mom'; account = 'alipay' }
+Check 'manual create income' ($m.ok -and $m.data.status -eq 'confirmed')
+$p = Call PATCH "/api/transactions/$($m.data.id)" @{ note = 'allowance' }
+Check 'patch edit' ($p.data.note -eq 'allowance')
+$d = Call DELETE "/api/transactions/$($m.data.id)"
+Check 'delete' ($d.ok -and $d.data.deleted -eq $m.data.id)
+
+# 7. list / summary
+$list = Call GET '/api/transactions'
+Check 'list returns items' ($list.ok -and $list.data.total -ge 2)
+$sum = Call GET '/api/summary'
+Check 'summary expense correct' ([math]::Abs($sum.data.expense - 18.5) -lt 0.001)
+Check 'summary has pending count' ($sum.data.pendingCount -ge 1)
+
+# 8. categories include seeded values
+$cats = (Call GET '/api/categories').data
+Check 'seeded expense categories present' ($cats.expense.Count -ge 5)
+
+# 9. static PWA assets
+foreach ($p in '/', '/app.js', '/styles.css', '/sw.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png') {
+  $r = Invoke-WebRequest -Uri "$base$p" -ErrorAction SilentlyContinue
+  Check "static $p" ($null -ne $r -and $r.StatusCode -eq 200)
+}
+
+Write-Host ''
+Write-Host "Result: $pass passed, $fail failed" -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Red' })
+if ($fail -gt 0) { exit 1 }

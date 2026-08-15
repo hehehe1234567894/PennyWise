@@ -1,0 +1,13 @@
+{
+  "name": "PennyWise 记账",
+  "short_name": "PennyWise",
+  "description": "零手动记账：交易文本/截图 → AI 解析 → 本地账本",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }
+  ]
+}

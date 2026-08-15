@@ -1,0 +1,17 @@
+{
+  "name": "pennywise",
+  "version": "0.1.0",
+  "description": "零手动记账：截图/文本 → LLM 解析 → 本地 SQLite 账本（Windows 自托管 + 手机 PWA）",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
