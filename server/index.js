@@ -1,15 +1,16 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
-import crypto from 'node:crypto'
 import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
-import { parseCapture, parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
+import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
 import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv } from './importer.js'
-import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport } from './reporter.js'
+import { pollMailCapture } from './mailin.js'
+import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, sendEmail } from './reporter.js'
 import { shortcutFile } from './shortcut.js'
+import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
@@ -17,29 +18,7 @@ const AUTH_TOKEN = env('AUTH_TOKEN', '')
 
 // 自动入账阈值：解析置信度 ≥ 阈值 → 直接入账，无需确认；1 = 全部手动确认
 function autoConfirmAt() {
-  const v = Number(env('AUTO_CONFIRM', '0.9'))
-  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.9
-}
-
-const IMAGE_DIR = path.join(DATA_DIR, 'images')
-const IMAGE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/webp': 'webp' }
-
-function detectImage(buf) {
-  if (!buf || buf.length < 12) return null
-  if (buf[0] === 0xff && buf[1] === 0xd8) return 'image/jpeg'
-  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image/png'
-  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image/gif'
-  if (buf[0] === 0x42 && buf[1] === 0x4d) return 'image/bmp'
-  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp'
-  return null
-}
-
-function saveImage(buf, mime) {
-  fs.mkdirSync(IMAGE_DIR, { recursive: true })
-  const ext = IMAGE_EXT[mime] || 'jpg'
-  const name = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`
-  fs.writeFileSync(path.join(IMAGE_DIR, name), buf)
-  return name // 相对文件名；通过 /api/image/:name 访问（随机名即访问凭证）
+  return autoConfirmFrom(env('AUTO_CONFIRM', '0.9'))
 }
 
 const app = express()
@@ -91,7 +70,8 @@ app.get('/api/health', (req, res) => {
     hasVision: v.enabled, visionModel: v.model, visionModels: v.models,
     autoConfirm: autoConfirmAt(),
     modelStatus: getModelStatus(),
-    billImport: { enabled: billStatus.enabled || mailConfig().enabled, ...billStatus },
+    billImport: { enabled: billStatus.enabled || mailConfig().billsEnabled, ...billStatus },
+    mailCapture: { ...mailCaptureStatus, enabled: mailCaptureStatus.enabled || mailConfig().captureEnabled },
   })
 })
 
@@ -197,46 +177,6 @@ app.delete('/api/categories/:name', (req, res) => {
 })
 
 // ---- 采集：文本 → LLM 解析 → 待确认（或高置信度自动入账） ----
-async function captureTextCore(text, clientId, sourceLabel) {
-  const raw = text.trim().slice(0, 4000)
-  const result = await parseCapture(raw)
-  let fields = {
-    ts: nowIso(), amount: null, direction: 'expense', merchant: '',
-    goods_name: '', category: null, account: 'other', note: '', confidence: null,
-  }
-  let parse = { code: 'no_key' }
-
-  if (result.ok) {
-    const d = result.data
-    parse = { code: 'ok', confidence: d.confidence }
-    fields = { ...fields, ts: d.ts || fields.ts, amount: d.amount, direction: d.direction, merchant: d.merchant, category: d.category, account: d.account, note: d.note, confidence: d.confidence }
-  } else {
-    parse = { code: result.code, error: result.error || '' }
-  }
-
-  // 规则记忆：同一商户自动套用历史分类并提高置信度
-  if (fields.merchant && fields.direction === 'expense') {
-    const rule = ruleFor(fields.merchant)
-    if (rule) {
-      fields.category = rule.category
-      if (typeof parse.confidence === 'number') parse.confidence = Math.min(1, parse.confidence + 0.1)
-    }
-  }
-
-  // 自动入账：解析成功且置信度达标 → 直接确认，无需人工点击
-  const status = (parse.code === 'ok' && fields.amount != null && fields.confidence != null && fields.confidence >= autoConfirmAt()) ? 'confirmed' : 'pending'
-
-  const info = db.prepare(`
-    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-  `).run(
-    newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
-    fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, raw, null, sourceLabel, status, fields.confidence, fields.note, nextRev(), nowIso(),
-  )
-  return { transaction: getTx(info.lastInsertRowid), parse }
-}
-
 app.post('/api/capture', async (req, res) => {
   const { text, ts, client_id: cid } = req.body || {}
   if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
@@ -248,7 +188,7 @@ app.post('/api/capture', async (req, res) => {
     if (exist) return res.json({ ok: true, data: { transaction: exist, parse: { code: 'duplicate' } } })
   }
 
-  const r = await captureTextCore(text, clientId, 'text')
+  const r = await captureTextCore(text, clientId, 'text', autoConfirmAt())
   res.status(201).json({ ok: true, data: r })
 })
 
@@ -256,7 +196,7 @@ app.post('/api/capture', async (req, res) => {
 app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (req, res) => {
   const text = String(req.body || '').trim()
   if (!text) return fail(res, 400, 'bad_request', '短信内容为空')
-  const r = await captureTextCore(text, null, 'sms')
+  const r = await captureTextCore(text, null, 'sms', autoConfirmAt())
   // 解析不出金额的（验证码/通知类短信）静默丢弃，不产生垃圾记录
   if (r.parse.code !== 'ok' || r.transaction.amount == null) {
     db.prepare('DELETE FROM transactions WHERE id = ?').run(r.transaction.id)
@@ -268,7 +208,7 @@ app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (r
 // ---- 账单导入（微信/支付宝 CSV，邮箱自动收取或手动上传） ----
 const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, error: '' }
 async function runBillImport() {
-  billStatus.enabled = mailConfig().enabled
+  billStatus.enabled = mailConfig().billsEnabled
   try {
     const r = await importBills(mailConfig())
     billStatus.lastRun = nowIso()
@@ -283,7 +223,7 @@ async function runBillImport() {
   }
 }
 app.post('/api/import-bills', async (req, res) => {
-  if (!mailConfig().enabled) return fail(res, 400, 'not_configured', '未配置邮箱（.env 里的 MAIL_USER/MAIL_PASS 与 AUTO_IMPORT=1），见 README')
+  if (!mailConfig().billsEnabled) return fail(res, 400, 'not_configured', '未配置账单邮件导入（.env 里的 MAIL_USER/MAIL_PASS 与 AUTO_IMPORT=1），见 README')
   res.json({ ok: true, data: await runBillImport() })
 })
 app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb' }), async (req, res) => {
@@ -294,6 +234,30 @@ app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb'
   if (parsed.error) return fail(res, 400, 'parse_error', parsed.error)
   res.json({ ok: true, data: await importBillRows(parsed.rows) })
 })
+
+// ---- 邮箱记账（给自己发邮件 → 自动记账并回信） ----
+const mailCaptureStatus = { enabled: false, lastRun: null, processed: 0, replies: 0, error: '' }
+async function runMailCapture() {
+  mailCaptureStatus.enabled = mailConfig().captureEnabled
+  try {
+    const r = await pollMailCapture(mailConfig(), autoConfirmAt())
+    mailCaptureStatus.lastRun = nowIso()
+    mailCaptureStatus.processed = r.processed
+    mailCaptureStatus.error = r.error || ''
+    if (r.results && r.results.length && mailerConfig().enabled) {
+      for (const res of r.results) {
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+        await sendEmail('PennyWise 记账结果', `<p style="font-family:sans-serif">${esc(res.reply)}</p>`)
+      }
+      mailCaptureStatus.replies = r.results.length
+    }
+    return r
+  } catch (e) {
+    mailCaptureStatus.lastRun = nowIso()
+    mailCaptureStatus.error = String(e?.message || e).slice(0, 200)
+    return { processed: 0, error: mailCaptureStatus.error }
+  }
+}
 
 // ---- 月度报告（邮箱 / Server酱 微信推送） ----
 app.get('/api/report/preview', (req, res) => {
@@ -363,50 +327,14 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
     if (exist) return res.json({ ok: true, data: { transaction: exist, parse: { code: 'duplicate' } } })
   }
 
-  const file = saveImage(buf, mime)
-  const result = await parseImage(buf, mime)
-  let fields = {
-    ts: nowIso(), amount: null, direction: 'expense', merchant: '',
-    goods_name: '', category: null, account: 'other', note: '', confidence: null,
-    raw_text: '', raw_image: file,
-  }
-  let parse = { code: 'no_key' }
-  if (result.ok) {
-    const d = result.data
-    parse = { code: 'ok', confidence: d.confidence, model: result.model || '' }
-    fields = { ...fields, ts: d.ts || fields.ts, amount: d.amount, direction: d.direction, merchant: d.merchant, goods_name: d.goods_name, category: d.category, account: d.account, confidence: d.confidence, raw_text: d.raw_text }
-  } else {
-    parse = { code: result.code, error: result.error || '' }
-  }
-
-  // 规则记忆：同一商户自动套用历史分类
-  if (fields.merchant && fields.direction === 'expense') {
-    const rule = ruleFor(fields.merchant)
-    if (rule) {
-      fields.category = rule.category
-      if (typeof parse.confidence === 'number') parse.confidence = Math.min(1, parse.confidence + 0.1)
-    }
-  }
-
-  // 自动入账：识别成功且置信度达标 → 直接确认
-  const status = (parse.code === 'ok' && fields.amount != null && fields.confidence != null && fields.confidence >= autoConfirmAt()) ? 'confirmed' : 'pending'
-
-  const info = db.prepare(`
-    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', ?, ?, ?, 0, ?, ?)
-  `).run(
-    newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
-    fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, fields.raw_text, fields.raw_image, status, fields.confidence, fields.note, nextRev(), nowIso(),
-  )
-
-  res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
+  const { transaction, parse } = await captureImageCore(buf, mime, clientId, 'image', autoConfirmAt())
+  res.status(201).json({ ok: true, data: { transaction, parse } })
 })
 
 // 已保存的截图（随机文件名即访问凭证；配合 token 鉴权场景外的 <img> 使用）
 app.get('/api/image/:name', (req, res) => {
   const name = String(req.params.name || '').replace(/[^a-zA-Z0-9._-]/g, '')
-  const file = path.join(IMAGE_DIR, name)
+  const file = path.join(DATA_DIR, 'images', name)
   if (!name || !fs.existsSync(file)) return fail(res, 404, 'not_found', '图片不存在')
   const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' }[path.extname(name).toLowerCase()] || 'image/jpeg'
   res.set('Cache-Control', 'private, max-age=31536000').set('Content-Type', mime).send(fs.readFileSync(file))
@@ -669,9 +597,14 @@ app.use((err, req, res, next) => {
 app.listen(PORT, '0.0.0.0', () => {
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
   // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次
-  if (mailConfig().enabled) {
+  if (mailConfig().billsEnabled) {
     setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
+  }
+  // 邮箱记账：配置后每 3 分钟收取一次"自己发给自己的邮件"
+  if (mailConfig().captureEnabled) {
+    setTimeout(() => { runMailCapture().catch(() => {}) }, 10000)
+    setInterval(() => { runMailCapture().catch(() => {}) }, 3 * 60 * 1000)
   }
   // 月度报告：每 30 分钟检查一次是否到发送时刻
   setInterval(() => { checkMonthlyReport().catch(() => {}) }, 30 * 60 * 1000)

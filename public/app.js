@@ -622,6 +622,8 @@
         <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
       </div>
       <p id="set-import-status" class="hint"></p>
+      <h3>邮箱记账（像机器人一样）</h3>
+      <p class="hint">开启 MAIL_CAPTURE=1 后，给自己邮箱发邮件即可记账：正文写交易文本、或附上支付截图，电脑每 3 分钟自动处理并回信告知结果。手机邮箱 App 即客户端，无需任何 App。</p>
       <h3>月报提醒</h3>
       <p class="hint">每月 1 日自动把上月汇总发到邮箱（绑定微信「QQ邮箱提醒」即可在微信里收到；可加 Server酱 直推微信，见 README）。</p>
       <div class="btn-row">

@@ -5,8 +5,12 @@ import { ImapFlow } from 'imapflow'
 // ================= 账单导入（微信/支付宝 CSV + 邮箱自动收取） =================
 
 export function mailConfig() {
+  const imapConfigured = Boolean(env('MAIL_USER')) && Boolean(env('MAIL_PASS')) && Boolean(env('MAIL_IMAP_HOST'))
   return {
-    enabled: env('AUTO_IMPORT', '0') === '1' && Boolean(env('MAIL_USER')) && Boolean(env('MAIL_PASS')),
+    imapConfigured,
+    billsEnabled: env('AUTO_IMPORT', '0') === '1' && imapConfigured,
+    captureEnabled: env('MAIL_CAPTURE', '0') === '1' && imapConfigured,
+    enabled: imapConfigured && (env('AUTO_IMPORT', '0') === '1' || env('MAIL_CAPTURE', '0') === '1'),
     host: env('MAIL_IMAP_HOST', ''),
     port: Number(env('MAIL_IMAP_PORT', '993')) || 993,
     user: env('MAIL_USER', ''),
@@ -146,7 +150,7 @@ export async function importBillRows(rows) {
 
 // 从邮箱收取账单附件并导入
 export async function importBills(cfg) {
-  if (!cfg.enabled) return { imported: 0, skipped: 0, error: '未配置邮箱（MAIL_* / AUTO_IMPORT）' }
+  if (!cfg.billsEnabled) return { imported: 0, skipped: 0, error: '未配置账单邮件导入（MAIL_* / AUTO_IMPORT）' }
   const client = new ImapFlow({
     host: cfg.host,
     port: cfg.port,
