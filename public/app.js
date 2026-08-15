@@ -617,13 +617,11 @@
       <div id="qr-panel" class="conn-panel"></div>
       <p class="hint">银行短信自动记账（0 点击）：<a class="link" href="/shortcut">下载快捷指令</a> → 导入后到「快捷指令 App → 自动化 → 收到信息」选择发卡银行号码并运行它。</p>
       <h3>账单导入</h3>
-      <p class="hint">配置邮箱后（.env 里 MAIL_* 与 AUTO_IMPORT=1），微信/支付宝账单邮件每 12 小时自动导入一次，完全不用管；也可以手动触发。</p>
+      <p class="hint">每 12 小时自动检查邮箱：只读取白名单发件人（微信/支付宝/银行）的账单邮件并解析入库，其他邮件一律不碰、不上传云端。也可以手动触发。</p>
       <div class="btn-row">
         <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
       </div>
       <p id="set-import-status" class="hint"></p>
-      <h3>邮箱记账（像机器人一样）</h3>
-      <p class="hint">开启 MAIL_CAPTURE=1 后，给自己邮箱发邮件即可记账：正文写交易文本、或附上支付截图，电脑每 3 分钟自动处理并回信告知结果。手机邮箱 App 即客户端，无需任何 App。</p>
       <h3>月报提醒</h3>
       <p class="hint">每月 1 日自动把上月汇总发到邮箱（绑定微信「QQ邮箱提醒」即可在微信里收到；可加 Server酱 直推微信，见 README）。</p>
       <div class="btn-row">

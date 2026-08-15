@@ -9,13 +9,13 @@ export function mailConfig() {
   return {
     imapConfigured,
     billsEnabled: env('AUTO_IMPORT', '0') === '1' && imapConfigured,
-    captureEnabled: env('MAIL_CAPTURE', '0') === '1' && imapConfigured,
-    enabled: imapConfigured && (env('AUTO_IMPORT', '0') === '1' || env('MAIL_CAPTURE', '0') === '1'),
+    enabled: imapConfigured && env('AUTO_IMPORT', '0') === '1',
     host: env('MAIL_IMAP_HOST', ''),
     port: Number(env('MAIL_IMAP_PORT', '993')) || 993,
     user: env('MAIL_USER', ''),
     pass: env('MAIL_PASS', ''),
     box: env('MAIL_BOX', 'INBOX'),
+    // 隐私红线：只读白名单发件人的账单邮件（微信/支付宝/银行），其他邮件一律不碰、不上传云端
     fromFilter: env('MAIL_FROM', '微信支付|支付宝|alipay|wechatpay'),
   }
 }
@@ -122,6 +122,80 @@ export function parseAlipayCsv(buf) {
   return { rows: out }
 }
 
+// 银行对账单 CSV：自动识别常见银行表头（收入/支出两列，或金额+方向列）
+export function parseBankCsv(buf) {
+  let text = buf.toString('utf8')
+  if (text.includes('\uFFFD')) text = new TextDecoder('gbk').decode(buf)
+  const rows = parseCsv(text)
+  const headerIdx = rows.findIndex((r) => {
+    const joined = r.map((s) => String(s).trim()).join('|')
+    return /交易日期|记账日期|交易时间|发生日期|日期/.test(joined) && /金额|发生额/.test(joined)
+  })
+  if (headerIdx < 0) return { rows: [], error: '未识别银行对账单表头' }
+  const h = rows[headerIdx].map((s) => String(s).trim())
+  const find = (...names) => h.findIndex((c) => names.some((n) => c.includes(n)))
+  const iDate = find('交易日期', '记账日期', '交易时间', '发生日期', '日期')
+  const iTime = find('交易时间')
+  const iIncome = find('收入金额', '收入', '存入金额', '贷方发生额', '贷方金额')
+  const iExpense = find('支出金额', '支出', '支取金额', '借方发生额', '借方金额')
+  const iAmount = find('交易金额', '发生额', '金额')
+  const iDir = find('收支', '借贷标志', '借贷', '收/支', '资金流向')
+  const iBalance = find('余额', '账户余额')
+  const iPeer = find('对方户名', '对方账号', '交易对方', '商户名称', '对方单位', '对方名称', '交易摘要', '摘要')
+  const iNote = find('备注', '用途', '附言', '交易摘要', '摘要')
+  const iTxn = find('流水号', '交易序号', '凭证号', '交易流水号', '序号')
+  if (iDate < 0) return { rows: [], error: '缺少日期列' }
+  if (iIncome < 0 && iExpense < 0 && iAmount < 0) return { rows: [], error: '缺少金额列' }
+  const out = []
+  let prevBalance = null
+  for (const r of rows.slice(headerIdx + 1)) {
+    const dateStr = String(r[iDate] || '').trim()
+    if (!/^\d{4}/.test(dateStr)) continue // 跳过合计/空行
+    const timeStr = iTime >= 0 && iTime !== iDate ? String(r[iTime] || '').trim() : ''
+    const ts = csvTime(dateStr + (timeStr ? ' ' + timeStr : '')) || nowIso()
+    const toNum = (i) => {
+      if (i < 0) return 0
+      const v = Number(String(r[i] || '').replace(/[¥￥,\s]/g, ''))
+      return Number.isFinite(v) ? v : 0
+    }
+    let amount = 0
+    let direction = 'expense'
+    if (iIncome >= 0 && iExpense >= 0) {
+      const inc = toNum(iIncome)
+      const exp = toNum(iExpense)
+      if (inc > 0) { amount = inc; direction = 'income' }
+      else if (exp > 0) { amount = exp; direction = 'expense' }
+      else continue
+    } else if (iAmount >= 0) {
+      amount = toNum(iAmount)
+      if (amount <= 0) continue
+      const dirRaw = iDir >= 0 ? String(r[iDir] || '').trim() : ''
+      if (/贷|收|收入/.test(dirRaw)) direction = 'income'
+      else if (/借|支|支出|付/.test(dirRaw)) direction = 'expense'
+      else if (iBalance >= 0 && prevBalance !== null) {
+        direction = toNum(iBalance) > prevBalance ? 'income' : 'expense'
+      } else continue
+    }
+    if (iBalance >= 0) prevBalance = toNum(iBalance)
+    const peer = iPeer >= 0 ? String(r[iPeer] || '').trim() : ''
+    const note = iNote >= 0 && iNote !== iPeer ? String(r[iNote] || '').trim() : ''
+    const txn = iTxn >= 0 ? String(r[iTxn] || '').trim() : ''
+    const ext = txn ? 'bank-' + txn : 'bank-' + dateStr + '|' + amount.toFixed(2) + '|' + peer
+    out.push({
+      ext_id: ext,
+      ts,
+      amount: Math.round(amount * 100) / 100,
+      direction,
+      merchant: peer.slice(0, 120),
+      goods_name: '',
+      account: 'bank',
+      note: note.slice(0, 200),
+      raw_text: `银行账单 | ${dateStr} | ${peer} | ¥${amount}`,
+    })
+  }
+  return { rows: out }
+}
+
 // 导入明细：ext_id 去重、规则记忆自动分类、直接确认入账
 export async function importBillRows(rows) {
   let imported = 0
@@ -164,9 +238,9 @@ export async function importBills(cfg) {
     const since = new Date(Date.now() - 45 * 24 * 3600 * 1000)
     const files = []
     for await (const msg of client.fetch({ since }, { envelope: true, bodyStructure: true }, { uid: true })) {
+      // 隐私红线：只读白名单发件人（微信/支付宝/银行账单），其他邮件一律不碰
       const from = (msg.envelope.from || []).map((f) => f.address || '').join(' ')
-      const subj = msg.envelope.subject || ''
-      if (!new RegExp(cfg.fromFilter, 'i').test(from + ' ' + subj)) continue
+      if (!new RegExp(cfg.fromFilter, 'i').test(from)) continue
       for (const att of msg.attachments || []) {
         const name = att.filename || ''
         if (!/\.csv$/i.test(name)) continue
@@ -180,7 +254,8 @@ export async function importBills(cfg) {
     let skipped = 0
     for (const f of files) {
       const isAli = /alipay|支付宝/i.test(f.name)
-      const parsed = isAli ? parseAlipayCsv(f.buffer) : parseWechatCsv(f.buffer.toString('utf8'))
+      const isWx = /wechat|微信/i.test(f.name)
+      const parsed = isAli ? parseAlipayCsv(f.buffer) : isWx ? parseWechatCsv(f.buffer.toString('utf8')) : parseBankCsv(f.buffer)
       if (parsed.error) continue
       const r = await importBillRows(parsed.rows)
       imported += r.imported

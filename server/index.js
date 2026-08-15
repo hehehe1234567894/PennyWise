@@ -6,9 +6,8 @@ import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
-import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv } from './importer.js'
-import { pollMailCapture } from './mailin.js'
-import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, sendEmail } from './reporter.js'
+import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv, parseBankCsv } from './importer.js'
+import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport } from './reporter.js'
 import { shortcutFile } from './shortcut.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
@@ -70,8 +69,7 @@ app.get('/api/health', (req, res) => {
     hasVision: v.enabled, visionModel: v.model, visionModels: v.models,
     autoConfirm: autoConfirmAt(),
     modelStatus: getModelStatus(),
-    billImport: { enabled: billStatus.enabled || mailConfig().billsEnabled, ...billStatus },
-    mailCapture: { ...mailCaptureStatus, enabled: mailCaptureStatus.enabled || mailConfig().captureEnabled },
+    billImport: { ...billStatus, enabled: billStatus.enabled || mailConfig().billsEnabled },
   })
 })
 
@@ -231,37 +229,14 @@ app.post('/api/import-bills', async (req, res) => {
   res.json({ ok: true, data: await runBillImport() })
 })
 app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb' }), async (req, res) => {
-  const kind = req.query.kind === 'alipay' ? 'alipay' : 'wechat'
+  const kind = String(req.query.kind || '')
   let parsed
   if (kind === 'alipay') parsed = parseAlipayCsv(req.body)
+  else if (kind === 'bank') parsed = parseBankCsv(req.body)
   else parsed = parseWechatCsv(req.body.toString('utf8'))
   if (parsed.error) return fail(res, 400, 'parse_error', parsed.error)
   res.json({ ok: true, data: await importBillRows(parsed.rows) })
 })
-
-// ---- 邮箱记账（给自己发邮件 → 自动记账并回信） ----
-const mailCaptureStatus = { enabled: false, lastRun: null, processed: 0, replies: 0, error: '' }
-async function runMailCapture() {
-  mailCaptureStatus.enabled = mailConfig().captureEnabled
-  try {
-    const r = await pollMailCapture(mailConfig(), autoConfirmAt())
-    mailCaptureStatus.lastRun = nowIso()
-    mailCaptureStatus.processed = r.processed
-    mailCaptureStatus.error = r.error || ''
-    if (r.results && r.results.length && mailerConfig().enabled) {
-      for (const res of r.results) {
-        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-        await sendEmail('PennyWise 记账结果', `<p style="font-family:sans-serif">${esc(res.reply)}</p>`)
-      }
-      mailCaptureStatus.replies = r.results.length
-    }
-    return r
-  } catch (e) {
-    mailCaptureStatus.lastRun = nowIso()
-    mailCaptureStatus.error = String(e?.message || e).slice(0, 200)
-    return { processed: 0, error: mailCaptureStatus.error }
-  }
-}
 
 // ---- 月度报告（邮箱 / Server酱 微信推送） ----
 app.get('/api/report/preview', (req, res) => {
@@ -600,15 +575,10 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
-  // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次
+  // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次（只读白名单发件人）
   if (mailConfig().billsEnabled) {
     setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
-  }
-  // 邮箱记账：配置后每 3 分钟收取一次"自己发给自己的邮件"
-  if (mailConfig().captureEnabled) {
-    setTimeout(() => { runMailCapture().catch(() => {}) }, 10000)
-    setInterval(() => { runMailCapture().catch(() => {}) }, 3 * 60 * 1000)
   }
   // 月度报告：每 30 分钟检查一次是否到发送时刻
   setInterval(() => { checkMonthlyReport().catch(() => {}) }, 30 * 60 * 1000)
