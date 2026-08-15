@@ -83,6 +83,10 @@ Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount =
 Check 'connect-info rejected remotely without token (401)' ((StatusOf GET '/api/connect-info' $null $extBase) -eq 401)
 
 # 3. capture (LLM parses; high confidence auto-confirms, otherwise stays pending)
+# 记录基线（账本可能已有真实数据，断言按差值）
+$baseSum = Call GET '/api/summary'
+$baseExpense = $baseSum.data.expense
+$basePending = $baseSum.data.pendingCount
 $c = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-1-$([guid]::NewGuid())" }
 Check 'capture creates record' ($c.ok -and ($c.data.transaction.status -eq 'pending' -or $c.data.transaction.status -eq 'confirmed'))
 Check 'capture returns parse state' ($null -ne $c.data.parse.code)
@@ -118,7 +122,7 @@ Check 'delete' ($d.ok -and $d.data.deleted -eq $m.data.id)
 $list = Call GET '/api/transactions'
 Check 'list returns items' ($list.ok -and $list.data.total -ge 1)
 $sum = Call GET '/api/summary'
-Check 'summary expense correct' ([math]::Abs($sum.data.expense - 18.5) -lt 0.001)
+Check 'summary expense correct' ([math]::Abs($sum.data.expense - ($baseExpense + 18.5)) -lt 0.001)
 
 # 8. categories include seeded values
 $cats = (Call GET '/api/categories').data
@@ -150,14 +154,14 @@ $pendUid = 'smoke-pend-' + [guid]::NewGuid().ToString('N')
 $pendPush = Call POST '/api/sync' @{ changes = @( @{ uid = $pendUid; type = 'put'; updated_at = (Get-Date).ToUniversalTime().ToString('o'); data = @{ ts = (Get-Date).ToUniversalTime().ToString('o'); amount = 5; direction = 'expense'; merchant = 'PendTest'; category = 'Dining'; account = 'other'; source = 'text'; status = 'pending' } } ) }
 Check 'sync push pending applied' ($pendPush.ok -and ($pendPush.data.applied -contains $pendUid))
 $sum2 = Call GET '/api/summary'
-Check 'summary has pending count' ($sum2.data.pendingCount -ge 1)
+Check 'summary has pending count' ($sum2.data.pendingCount -ge ($basePending + 1))
 Call POST '/api/sync' @{ changes = @( @{ uid = $pendUid; type = 'del'; updated_at = (Get-Date).ToUniversalTime().AddSeconds(1).ToString('o') } ) } | Out-Null
 
 # 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null
 Call DELETE '/api/categories/Dining' | Out-Null
 $final = Call GET '/api/summary'
-Check 'cleanup restores empty ledger' ([math]::Abs($final.data.expense) -lt 0.001)
+Check 'cleanup restores empty ledger' ([math]::Abs($final.data.expense - $baseExpense) -lt 0.001)
 
 Write-Host ''
 Write-Host "Result: $pass passed, $fail failed" -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Red' })
