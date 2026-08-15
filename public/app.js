@@ -297,7 +297,7 @@
   $('btn-paste').addEventListener('click', async () => {
     try {
       const t = await navigator.clipboard.readText()
-      if (t) { $('capture-text').value = t; toast('已粘贴') }
+      if (t) { $('capture-text').value = t; capture(t) }
       else toast('剪贴板为空')
     } catch (e) { toast('无法读取剪贴板，请长按输入框手动粘贴') }
   })
@@ -352,10 +352,14 @@
       const data = await api('/api/capture-image', { method: 'POST', body: { image_base64: b64, mime: file.type || 'image/png', client_id: clientId } })
       const { transaction, parse } = data
       await mPut('tx', transaction)
-      if (parse.code === 'ok') toast('识别完成，请确认')
-      else if (parse.code === 'duplicate') toast('这条已经存在')
-      else toast('识别失败（' + (parse.error || parse.code) + '），请手动填写')
-      openEditor('parse', transaction)
+      if (transaction.status === 'confirmed') {
+        toast(`已自动入账 ✓（置信度 ${Math.round((transaction.confidence || 0) * 100)}%）`)
+      } else {
+        if (parse.code === 'ok') toast('识别完成，请确认')
+        else if (parse.code === 'duplicate') toast('这条已经存在')
+        else toast('识别失败（' + (parse.error || parse.code) + '），请手动填写')
+        openEditor('parse', transaction)
+      }
       refreshAll()
     } catch (e) {
       if (/网络|令牌/.test(e.message)) {
@@ -384,11 +388,15 @@
       $('capture-text').value = ''
       const { transaction, parse } = data
       await mPut('tx', transaction) // 写入本地镜像（uid 由服务器分配）
-      if (parse.code === 'no_key') toast('未配置 AI 模型，请手动填写确认')
-      else if (parse.code === 'ok') toast('解析完成，请确认')
-      else if (parse.code === 'duplicate') toast('这条已经存在')
-      else toast('解析失败（' + parse.code + '），已转手动确认')
-      openEditor('parse', transaction)
+      if (transaction.status === 'confirmed') {
+        toast(`已自动入账 ✓（置信度 ${Math.round((transaction.confidence || 0) * 100)}%）`)
+      } else {
+        if (parse.code === 'no_key') toast('未配置 AI 模型，请手动填写确认')
+        else if (parse.code === 'ok') toast('解析完成，请确认')
+        else if (parse.code === 'duplicate') toast('这条已经存在')
+        else toast('解析失败（' + parse.code + '），已转手动确认')
+        openEditor('parse', transaction)
+      }
       refreshAll()
     } catch (e) {
       if (/网络|令牌/.test(e.message)) {
@@ -548,6 +556,17 @@
         <button type="button" class="btn" id="set-llm-save">保存</button>
       </div>
       <p id="set-llm-status" class="hint"></p>
+      <h3>自动化</h3>
+      <p class="hint">解析置信度达到阈值就直接入账，不弹确认框；1.0 = 全部手动确认。</p>
+      <label>自动入账阈值
+        <select id="set-autoconfirm">
+          <option value="0.9">0.9 · 只自动放行高置信度（推荐）</option>
+          <option value="0.8">0.8 · 更自动</option>
+          <option value="0.7">0.7 · 激进</option>
+          <option value="1">1.0 · 关闭自动，全部确认</option>
+        </select>
+      </label>
+      <p id="set-auto-status" class="hint"></p>
       <h3>连接手机</h3>
       <p class="hint">用 iPhone 相机扫二维码即可自动配对（令牌免输入），扫完建议"添加到主屏幕"当 App 用。</p>
       <div id="qr-panel" class="conn-panel"></div>
@@ -578,6 +597,16 @@
         $('set-llm-status').textContent = '✗ 保存失败：' + e.message
       }
     })
+    // 自动入账阈值（保存到服务器，对所有设备生效）
+    $('set-autoconfirm').addEventListener('change', async () => {
+      const v = Number($('set-autoconfirm').value)
+      try {
+        await api('/api/settings', { method: 'POST', body: { auto_confirm: v } })
+        $('set-auto-status').textContent = '✓ 已保存'
+      } catch (e) {
+        $('set-auto-status').textContent = '✗ 保存失败：' + e.message
+      }
+    })
     $('set-reprobe').addEventListener('click', async () => {
       renderConnPanel()
       const el = $('conn-panel')
@@ -587,9 +616,15 @@
     })
     renderConnPanel()
     renderQrPanel()
-    // 回填当前 AI Key 状态
+    // 回填当前 AI Key 状态与自动入账阈值
     api('/api/health').then((h) => {
       if (h.hasLLM) $('set-llm-status').textContent = `当前模型 ${h.model} 已就绪 ✓`
+      const sel = $('set-autoconfirm')
+      if (sel) {
+        const cur = String(h.autoConfirm ?? 0.9)
+        if ([...sel.options].some((o) => o.value === cur)) sel.value = cur
+        else { const o = document.createElement('option'); o.value = cur; o.textContent = cur; sel.appendChild(o); sel.value = cur }
+      }
     }).catch(() => {})
   }
 
@@ -842,6 +877,16 @@
       localStorage.setItem(TOKEN_KEY, token)
       history.replaceState(null, '', location.pathname + location.search)
       setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
+    }
+    // 分享式记账回跳：截图/文本已被 Service Worker 收进账本
+    const shared = location.search.match(/shared=(image|text)/)
+    if (shared) {
+      history.replaceState(null, '', location.pathname)
+      setTimeout(() => {
+        if (shared[1] === 'image') toast('✓ 已接收截图，AI 识别中…')
+        else toast('✓ 已接收文本，AI 解析中…')
+        syncNow()
+      }, 800)
     }
     ensureUnlocked()
   }

@@ -32,6 +32,13 @@ function StatusOf($method, $path, $body = $null, $baseUrl = $base) {
   } catch { return [int]$_.Exception.Response.StatusCode.value__ }
 }
 
+# 0. pre-clean leftovers from aborted runs (smoke- prefixed ids / test merchants)
+try {
+  $leftovers = @((Call GET '/api/transactions?limit=500').data.items | Where-Object { $_.client_id -like 'smoke-*' -or $_.uid -like 'smoke-*' -or $_.merchant -in @('FamilyMart', 'PendTest', 'SyncTest') })
+  foreach ($l in $leftovers) { Call DELETE "/api/transactions/$($l.id)" | Out-Null }
+  if ($leftovers.Count -gt 0) { Write-Host "INFO  pre-cleaned $($leftovers.Count) leftover test rows" -ForegroundColor Yellow }
+} catch { }
+
 # 1. public endpoints
 $h = Call GET '/api/health' -withToken $false
 Check 'health endpoint' ($h.ok -eq $true)
@@ -55,6 +62,11 @@ Check 'connect-info available on localhost without token' ($ci.ok -and $ci.data.
 # 1d. security headers
 $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Content-Type-Options|X-Frame-Options'
 Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
+Check 'health reports autoConfirm' ([double]$h.autoConfirm -ge 0 -and [double]$h.autoConfirm -le 1)
+$sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
+Check 'share fallback redirects (303)' ($sh -eq '303')
+$ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }
+Check 'settings auto_confirm roundtrip' ($ac.ok -and $ac.data.autoConfirm -eq 0.9)
 
 # 2. auth (from a non-local address: this machine's LAN IP)
 $extBase = "http://$($rc.lan[0].ip):8720"
@@ -62,9 +74,9 @@ Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $
 Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 } $extBase) -eq 401)
 Check 'connect-info rejected remotely without token (401)' ((StatusOf GET '/api/connect-info' $null $extBase) -eq 401)
 
-# 3. capture (no LLM key -> manual-confirm mode)
+# 3. capture (LLM parses; high confidence auto-confirms, otherwise stays pending)
 $c = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-1-$([guid]::NewGuid())" }
-Check 'capture creates pending' ($c.ok -and $c.data.transaction.status -eq 'pending')
+Check 'capture creates record' ($c.ok -and ($c.data.transaction.status -eq 'pending' -or $c.data.transaction.status -eq 'confirmed'))
 Check 'capture returns parse state' ($null -ne $c.data.parse.code)
 $txId = $c.data.transaction.id
 
@@ -73,6 +85,7 @@ $dup = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; cl
 $dupId = $dup.data.transaction.id
 $dup2 = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = $dup.data.transaction.client_id }
 Check 'outbox retry is idempotent' ($dup2.data.parse.code -eq 'duplicate')
+Call DELETE "/api/transactions/$dupId" | Out-Null  # 清理重复项，避免影响汇总断言
 
 # 5. register a custom category (also exercises the categories API; idempotent)
 $catsBefore = (Call GET '/api/categories').data
@@ -95,10 +108,9 @@ Check 'delete' ($d.ok -and $d.data.deleted -eq $m.data.id)
 
 # 7. list / summary
 $list = Call GET '/api/transactions'
-Check 'list returns items' ($list.ok -and $list.data.total -ge 2)
+Check 'list returns items' ($list.ok -and $list.data.total -ge 1)
 $sum = Call GET '/api/summary'
 Check 'summary expense correct' ([math]::Abs($sum.data.expense - 18.5) -lt 0.001)
-Check 'summary has pending count' ($sum.data.pendingCount -ge 1)
 
 # 8. categories include seeded values
 $cats = (Call GET '/api/categories').data
@@ -125,9 +137,16 @@ $pull3 = Call GET "/api/sync?since=$($pull2.data.rev)"
 $foundDel = $pull3.data.changes | Where-Object { $_.uid -eq $syncUid -and $_.type -eq 'del' }
 Check 'sync tombstone propagated' ($null -ne $foundDel)
 
+# 10b. deterministic pending record via sync push (no LLM involved)
+$pendUid = 'smoke-pend-' + [guid]::NewGuid().ToString('N')
+$pendPush = Call POST '/api/sync' @{ changes = @( @{ uid = $pendUid; type = 'put'; updated_at = (Get-Date).ToUniversalTime().ToString('o'); data = @{ ts = (Get-Date).ToUniversalTime().ToString('o'); amount = 5; direction = 'expense'; merchant = 'PendTest'; category = 'Dining'; account = 'other'; source = 'text'; status = 'pending' } } ) }
+Check 'sync push pending applied' ($pendPush.ok -and ($pendPush.data.applied -contains $pendUid))
+$sum2 = Call GET '/api/summary'
+Check 'summary has pending count' ($sum2.data.pendingCount -ge 1)
+Call POST '/api/sync' @{ changes = @( @{ uid = $pendUid; type = 'del'; updated_at = (Get-Date).ToUniversalTime().AddSeconds(1).ToString('o') } ) } | Out-Null
+
 # 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null
-Call DELETE "/api/transactions/$dupId" | Out-Null
 Call DELETE '/api/categories/Dining' | Out-Null
 $final = Call GET '/api/summary'
 Check 'cleanup restores empty ledger' ([math]::Abs($final.data.expense) -lt 0.001)

@@ -12,6 +12,12 @@ import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
 
+// 自动入账阈值：解析置信度 ≥ 阈值 → 直接入账，无需确认；1 = 全部手动确认
+function autoConfirmAt() {
+  const v = Number(env('AUTO_CONFIRM', '0.9'))
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.9
+}
+
 const IMAGE_DIR = path.join(DATA_DIR, 'images')
 const IMAGE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/webp': 'webp' }
 
@@ -75,7 +81,12 @@ const fail = (res, status, code, error) => res.status(status).json({ ok: false, 
 
 // ---- 基本信息 ----
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, time: nowIso(), hasLLM: llmConfig().enabled, model: llmConfig().model, hasVision: visionConfig().enabled, visionModel: visionConfig().model })
+  res.json({
+    ok: true, time: nowIso(),
+    hasLLM: llmConfig().enabled, model: llmConfig().model,
+    hasVision: visionConfig().enabled, visionModel: visionConfig().model,
+    autoConfirm: autoConfirmAt(),
+  })
 })
 
 // 扫描本机网卡：区分局域网与 Tailscale（100.x 前缀或网卡名）
@@ -145,6 +156,12 @@ app.post('/api/settings', (req, res) => {
     writeEnv('LLM_API_KEY', key)
     changes.llmConfigured = Boolean(key)
   }
+  if (b.auto_confirm !== undefined) {
+    const v = Number(b.auto_confirm)
+    if (!Number.isFinite(v) || v < 0 || v > 1) return fail(res, 400, 'bad_request', 'auto_confirm 需在 0~1 之间')
+    writeEnv('AUTO_CONFIRM', String(v))
+    changes.autoConfirm = v
+  }
   res.json({ ok: true, data: changes })
 })
 app.get('/api/config', (req, res) => {
@@ -209,13 +226,16 @@ app.post('/api/capture', async (req, res) => {
     }
   }
 
+  // 自动入账：解析成功且置信度达标 → 直接确认，无需人工点击
+  const status = (parse.code === 'ok' && fields.amount != null && fields.confidence != null && fields.confidence >= autoConfirmAt()) ? 'confirmed' : 'pending'
+
   const info = db.prepare(`
     INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'text', 'pending', ?, ?, 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'text', ?, ?, ?, 0, ?, ?)
   `).run(
     newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
     fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, raw, null, fields.confidence, fields.note, nextRev(), nowIso(),
+    fields.account, raw, null, status, fields.confidence, fields.note, nextRev(), nowIso(),
   )
 
   res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
@@ -273,13 +293,16 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
     }
   }
 
+  // 自动入账：识别成功且置信度达标 → 直接确认
+  const status = (parse.code === 'ok' && fields.amount != null && fields.confidence != null && fields.confidence >= autoConfirmAt()) ? 'confirmed' : 'pending'
+
   const info = db.prepare(`
     INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', 'pending', ?, ?, 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'image', ?, ?, ?, 0, ?, ?)
   `).run(
     newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
     fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, fields.raw_text, fields.raw_image, fields.confidence, fields.note, nextRev(), nowIso(),
+    fields.account, fields.raw_text, fields.raw_image, status, fields.confidence, fields.note, nextRev(), nowIso(),
   )
 
   res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
@@ -451,6 +474,8 @@ async function applyChange(c) {
         d.account = v.account
         d.raw_text = v.raw_text || d.raw_text
         d.confidence = v.confidence
+        // 同步补识别的截图：置信度达标同样自动入账
+        if (d.amount != null && d.confidence != null && d.confidence >= autoConfirmAt()) d.status = 'confirmed'
       }
     }
   }
@@ -533,6 +558,9 @@ app.get('/api/summary', (req, res) => {
     data: { month, expense, income, refund, transfer, balance: income + refund - expense, count, byCategory, pendingCount },
   })
 })
+
+// 分享入口兜底（无 Service Worker 的浏览器直接回到首页）
+app.post('/share', (req, res) => res.redirect(303, '/'))
 
 // ---- 静态 PWA ----
 app.use(express.static(PUBLIC_DIR, { maxAge: '1h', index: 'index.html' }))
