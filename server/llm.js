@@ -89,7 +89,12 @@ export function visionConfig() {
   const base = env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '')
   const apiKey = env('VISION_API_KEY')
   const model = env('VISION_MODEL', 'qwen-vl-plus')
-  return { base, apiKey, model, enabled: Boolean(apiKey) }
+  // 按序降级链：前面的模型失败（网络/报错/格式问题）自动换下一个
+  const models = env('VISION_MODELS', '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return { base, apiKey, model, models: models.length ? models : [model], enabled: Boolean(apiKey) }
 }
 
 const VISION_SYSTEM_PROMPT = `你是"PennyWise"记账系统的支付截图解析器。用户会给你微信/支付宝/银行 App 的支付成功页、账单详情或收银小票截图。你只输出一个 JSON 对象，不要输出任何解释、代码块标记或多余文字。
@@ -107,12 +112,24 @@ const VISION_SYSTEM_PROMPT = `你是"PennyWise"记账系统的支付截图解析
 
 输出必须是一个合法的 JSON 对象，只包含上述字段。`
 
-export async function parseImage(buffer, mime, { timeoutMs = 90000 } = {}) {
+export async function parseImage(buffer, mime, { timeoutMs = 30000 } = {}) {
   const cfg = visionConfig()
   if (!cfg.enabled) return { ok: false, code: 'no_key', error: '未配置 VISION_API_KEY，无法识别截图' }
   const dataUrl = `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}`
+
+  // 按序降级：依次尝试模型链，全部失败才报错
+  const errors = []
+  for (const model of cfg.models) {
+    const r = await tryVisionModel(cfg, model, dataUrl, timeoutMs)
+    if (r.ok) return r
+    errors.push(`${model}: ${r.error || r.code}`)
+  }
+  return { ok: false, code: 'all_failed', error: errors.join(' | ').slice(0, 400) }
+}
+
+async function tryVisionModel(cfg, model, dataUrl, timeoutMs) {
   const body = {
-    model: cfg.model,
+    model,
     messages: [
       { role: 'system', content: VISION_SYSTEM_PROMPT },
       {
@@ -135,14 +152,18 @@ export async function parseImage(buffer, mime, { timeoutMs = 90000 } = {}) {
     })
     if (!res.ok) {
       const t = await res.text().catch(() => '')
-      return { ok: false, code: `http_${res.status}`, error: t.slice(0, 300) }
+      return { ok: false, code: `http_${res.status}`, error: t.slice(0, 200) }
     }
     const json = await res.json()
     let content = json?.choices?.[0]?.message?.content ?? ''
     content = String(content).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
-    return { ok: true, data: sanitizeVision(JSON.parse(content)) }
+    let data
+    try { data = JSON.parse(content) } catch (e) {
+      return { ok: false, code: 'bad_json', error: '模型未返回合法 JSON' }
+    }
+    return { ok: true, data: sanitizeVision(data), model }
   } catch (e) {
-    return { ok: false, code: 'network', error: String(e?.message || e).slice(0, 300) }
+    return { ok: false, code: 'network', error: String(e?.message || e).slice(0, 200) }
   }
 }
 

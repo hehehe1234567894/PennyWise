@@ -81,10 +81,11 @@ const fail = (res, status, code, error) => res.status(status).json({ ok: false, 
 
 // ---- 基本信息 ----
 app.get('/api/health', (req, res) => {
+  const v = visionConfig()
   res.json({
     ok: true, time: nowIso(),
     hasLLM: llmConfig().enabled, model: llmConfig().model,
-    hasVision: visionConfig().enabled, visionModel: visionConfig().model,
+    hasVision: v.enabled, visionModel: v.model, visionModels: v.models,
     autoConfirm: autoConfirmAt(),
   })
 })
@@ -278,7 +279,7 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
   let parse = { code: 'no_key' }
   if (result.ok) {
     const d = result.data
-    parse = { code: 'ok', confidence: d.confidence }
+    parse = { code: 'ok', confidence: d.confidence, model: result.model || '' }
     fields = { ...fields, ts: d.ts || fields.ts, amount: d.amount, direction: d.direction, merchant: d.merchant, goods_name: d.goods_name, category: d.category, account: d.account, confidence: d.confidence, raw_text: d.raw_text }
   } else {
     parse = { code: result.code, error: result.error || '' }

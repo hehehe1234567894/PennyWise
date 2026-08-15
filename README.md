@@ -58,13 +58,19 @@
 
 ## 换模型 / 成本
 
-模型接口均为 OpenAI 兼容格式，网页设置或 `.env` 三行即可切换：
+文本模型接口均为 OpenAI 兼容格式，网页设置或 `.env` 三行即可切换：
 
 - 智谱：`LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4`，`LLM_MODEL=glm-4-flash`
 - 阿里：`LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`，`LLM_MODEL=qwen-plus`
 - 本地 Ollama（完全离线）：`LLM_BASE_URL=http://127.0.0.1:11434/v1`，`LLM_MODEL=qwen2.5:7b`
 
-DeepSeek 解析一条交易约 ¥0.001，几百笔/月成本几毛到几块钱。
+**视觉模型降级链**：`.env` 里的 `VISION_MODELS` 按顺序尝试，前面的失败（网络/报错/格式问题）自动换下一个，默认：
+
+```
+qwen3-vl-flash → qwen3.7-flash → qwen3.5-flash → qwen-vl-plus
+```
+
+DeepSeek 解析一条交易约 ¥0.001，截图一张约 ¥0.01–0.05，几百笔/月成本几毛到几块钱。
 
 ## 测试
 
