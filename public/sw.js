@@ -1,5 +1,5 @@
 /* PennyWise Service Worker：应用壳离线缓存；/api 请求永远走网络（失败由页面离线队列兜底） */
-const CACHE = 'pennywise-v2'
+const CACHE = 'pennywise-v3'
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg']
 
 self.addEventListener('install', (e) => {

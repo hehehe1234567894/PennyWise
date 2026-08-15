@@ -25,9 +25,9 @@ function Call($method, $path, $body = $null, $withToken = $true) {
   if ($null -ne $body) { $p.ContentType = 'application/json'; $p.Body = ($body | ConvertTo-Json -Compress -Depth 8) }
   Invoke-RestMethod @p
 }
-function StatusOf($method, $path, $body = $null) {
+function StatusOf($method, $path, $body = $null, $baseUrl = $base) {
   try {
-    $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
+    $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri "$baseUrl$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
     return $r.StatusCode
   } catch { return [int]$_.Exception.Response.StatusCode.value__ }
 }
@@ -37,9 +37,26 @@ $h = Call GET '/api/health' -withToken $false
 Check 'health endpoint' ($h.ok -eq $true)
 Check 'config says token required' ((Call GET '/api/config' -withToken $false).tokenRequired -eq $true)
 
-# 2. auth
-Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' }) -eq 401)
-Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 }) -eq 401)
+# 1b. reachability & CORS (connection probing endpoints, public)
+$rc = Invoke-RestMethod -Uri "$base/api/reachability"
+Check 'reachability endpoint' ($rc.ok -eq $true -and $rc.port -eq 8720)
+Check 'reachability lists addresses' (($rc.lan.Count + $rc.tailscale.Count) -ge 1)
+$cors = curl.exe -s -i -H 'Origin: http://example.com' "$base/api/reachability" | Select-String 'Access-Control-Allow-Origin'
+Check 'CORS allow-origin header' ($null -ne $cors)
+$pre = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H 'Origin: http://example.com' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
+Check 'CORS preflight returns 204' ($pre -eq '204')
+
+# 1c. QR pairing: localhost is trusted without token, remote still requires it
+$qr = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/qr?text=test&size=100"
+Check 'qr endpoint returns svg' ($qr.StatusCode -eq 200 -and $qr.Content -match '<svg')
+$ci = Call GET '/api/connect-info' -withToken $false
+Check 'connect-info available on localhost without token' ($ci.ok -and $ci.data.token -eq $token)
+
+# 2. auth (from a non-local address: this machine's LAN IP)
+$extBase = "http://$($rc.lan[0].ip):8720"
+Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $extBase) -eq 401)
+Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 } $extBase) -eq 401)
+Check 'connect-info rejected remotely without token (401)' ((StatusOf GET '/api/connect-info' $null $extBase) -eq 401)
 
 # 3. capture (no LLM key -> manual-confirm mode)
 $c = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-1-$([guid]::NewGuid())" }
@@ -88,15 +105,6 @@ foreach ($p in '/', '/app.js', '/styles.css', '/sw.js', '/manifest.webmanifest',
   $r = Invoke-WebRequest -UseBasicParsing -Uri "$base$p" -ErrorAction SilentlyContinue
   Check "static $p" ($null -ne $r -and $r.StatusCode -eq 200)
 }
-
-# 10. reachability & CORS (connection probing endpoints, public)
-$rc = Invoke-RestMethod -Uri "$base/api/reachability"
-Check 'reachability endpoint' ($rc.ok -eq $true -and $rc.port -eq 8720)
-Check 'reachability lists addresses' (($rc.lan.Count + $rc.tailscale.Count) -ge 1)
-$cors = curl.exe -s -i -H 'Origin: http://example.com' "$base/api/reachability" | Select-String 'Access-Control-Allow-Origin'
-Check 'CORS allow-origin header' ($null -ne $cors)
-$pre = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H 'Origin: http://example.com' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
-Check 'CORS preflight returns 204' ($pre -eq '204')
 
 # 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null

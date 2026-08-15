@@ -140,6 +140,9 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; 
   box-shadow: 0 4px 16px rgba(0,0,0,.4);
 }
 .conn-panel { margin: 4px 0 8px; }
+.qr-item { background: var(--card2); border-radius: 12px; padding: 12px; margin-bottom: 10px; text-align: center; }
+.qr-label { color: var(--dim); font-size: 12px; margin-bottom: 8px; text-align: left; }
+.qr-img { width: 220px; height: 220px; border-radius: 8px; background: #fff; padding: 6px; }
 .conn-row { background: var(--card2); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; }
 .conn-url { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
 .conn-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }

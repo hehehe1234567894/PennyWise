@@ -1,6 +1,9 @@
 import os from 'node:os'
+import fs from 'node:fs'
+import path from 'node:path'
 import express from 'express'
-import { env, PUBLIC_DIR } from './env.js'
+import QRCode from 'qrcode'
+import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth } from './db.js'
 import { parseCapture, llmConfig } from './llm.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
@@ -24,10 +27,15 @@ app.use((req, res, next) => {
   next()
 })
 
-// ---- 鉴权：/api 下除 config/health/reachability 外都要求 X-Auth-Token ----
+// ---- 鉴权：/api 下公开端点除外，本机直连（localhost）免令牌，其余要求 X-Auth-Token ----
+const isLoop = (ip) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
+const PUBLIC_API = ['/config', '/health', '/reachability', '/qr']
 app.use('/api', (req, res, next) => {
   if (!AUTH_TOKEN) return next()
-  if (req.path === '/config' || req.path === '/health' || req.path === '/reachability') return next()
+  if (PUBLIC_API.includes(req.path)) return next()
+  // 本机直连（在本机浏览器打开）免令牌：设置/二维码流程零输入
+  const xff = (req.get('x-forwarded-for') || '').split(',')[0].trim()
+  if (isLoop(req.ip) && (!xff || isLoop(xff))) return next()
   if (req.get('x-auth-token') === AUTH_TOKEN) return next()
   return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请在设置中填写 AUTH_TOKEN' })
 })
@@ -39,8 +47,8 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: nowIso(), hasLLM: llmConfig().enabled, model: llmConfig().model })
 })
 
-// 可达性自报：手机端"连接检测"据此探测哪个地址可用（公开，无需 token）
-app.get('/api/reachability', (req, res) => {
+// 扫描本机网卡：区分局域网与 Tailscale（100.x 前缀或网卡名）
+function scanInterfaces() {
   const nets = os.networkInterfaces()
   const lan = []
   const tailscale = []
@@ -52,6 +60,12 @@ app.get('/api/reachability', (req, res) => {
       else lan.push({ ip: n.address, iface })
     }
   }
+  return { lan, tailscale }
+}
+
+// 可达性自报：手机端"连接检测"据此探测哪个地址可用（公开，无需 token）
+app.get('/api/reachability', (req, res) => {
+  const { lan, tailscale } = scanInterfaces()
   res.json({
     ok: true,
     port: PORT,
@@ -61,6 +75,46 @@ app.get('/api/reachability', (req, res) => {
     tsName: env('TAILSCALE_NAME', '').replace(/\/+$/, ''),
     time: nowIso(),
   })
+})
+
+// 手机配对信息（含令牌）：仅供本机页面调用，用于生成"扫码即连"二维码
+app.get('/api/connect-info', (req, res) => {
+  const { lan, tailscale } = scanInterfaces()
+  res.json({
+    ok: true,
+    data: {
+      token: AUTH_TOKEN,
+      port: PORT,
+      lan,
+      tailscale,
+      tsName: env('TAILSCALE_NAME', '').replace(/\/+$/, ''),
+    },
+  })
+})
+
+// 二维码渲染（公开）：把任意短文本画成 SVG
+app.get('/api/qr', async (req, res) => {
+  const text = String(req.query.text || '')
+  if (!text || text.length > 800) return fail(res, 400, 'bad_request', 'text 为空或过长')
+  const width = Math.min(Math.max(Number(req.query.size) || 220, 100), 600)
+  try {
+    const svg = await QRCode.toString(text, { type: 'svg', margin: 1, width, errorCorrectionLevel: 'M' })
+    res.set('Content-Type', 'image/svg+xml').set('Cache-Control', 'no-store').send(svg)
+  } catch (e) {
+    fail(res, 500, 'server_error', '二维码生成失败')
+  }
+})
+
+// 网页设置：修改配置并立即生效（无需重启）
+app.post('/api/settings', (req, res) => {
+  const b = req.body || {}
+  const changes = {}
+  if (b.llm_api_key !== undefined) {
+    const key = String(b.llm_api_key).trim().slice(0, 200)
+    writeEnv('LLM_API_KEY', key)
+    changes.llmConfigured = Boolean(key)
+  }
+  res.json({ ok: true, data: changes })
 })
 app.get('/api/config', (req, res) => {
   res.json({ ok: true, tokenRequired: Boolean(AUTH_TOKEN), hasLLM: llmConfig().enabled })
@@ -262,6 +316,7 @@ app.use((err, req, res, next) => {
 })
 
 app.listen(PORT, '0.0.0.0', () => {
+  try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
   console.log('')
   console.log('  PennyWise 已启动')
   console.log(`  本机访问:   http://localhost:${PORT}`)

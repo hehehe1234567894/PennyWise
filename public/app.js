@@ -441,6 +441,16 @@
         <button type="button" class="btn btn-primary" id="set-save">保存并测试</button>
       </div>
       <p id="set-status" class="hint"></p>
+      <h3>AI 模型</h3>
+      <p class="hint">交易解析用的 API Key（在 <code>platform.deepseek.com</code> 注册获取）。留空则解析跳过、手动确认。</p>
+      <label>DeepSeek API Key<input id="set-llm" type="password" autocomplete="off" placeholder="sk-..."></label>
+      <div class="btn-row">
+        <button type="button" class="btn" id="set-llm-save">保存</button>
+      </div>
+      <p id="set-llm-status" class="hint"></p>
+      <h3>连接手机</h3>
+      <p class="hint">用 iPhone 相机扫二维码即可自动配对（令牌免输入），扫完建议"添加到主屏幕"当 App 用。</p>
+      <div id="qr-panel" class="conn-panel"></div>
       <h3>连接</h3>
       <p class="hint">自动检测可用地址，优先局域网直连；在家点"打开"切换到局域网地址更快，校园网会自动走 Tailscale。</p>
       <div id="conn-panel" class="conn-panel"></div>
@@ -458,6 +468,16 @@
         $('set-status').textContent = '✗ 连接失败：' + e.message
       }
     })
+    // AI Key 保存（服务器回写 .env 并立即生效，无需重启）
+    $('set-llm-save').addEventListener('click', async () => {
+      const key = $('set-llm').value.trim()
+      try {
+        const d = await api('/api/settings', { method: 'POST', body: { llm_api_key: key } })
+        $('set-llm-status').textContent = d.llmConfigured ? '✓ 已保存并生效' : '✓ 已清空（手动模式）'
+      } catch (e) {
+        $('set-llm-status').textContent = '✗ 保存失败：' + e.message
+      }
+    })
     $('set-reprobe').addEventListener('click', async () => {
       renderConnPanel()
       const el = $('conn-panel')
@@ -466,6 +486,37 @@
       if (!pick) el.innerHTML = '<p class="hint">所有地址都不可达，请检查电脑是否开机、服务是否启动</p>'
     })
     renderConnPanel()
+    renderQrPanel()
+    // 回填当前 AI Key 状态
+    api('/api/health').then((h) => {
+      if (h.hasLLM) $('set-llm-status').textContent = `当前模型 ${h.model} 已就绪 ✓`
+    }).catch(() => {})
+  }
+
+  async function renderQrPanel() {
+    const el = $('qr-panel')
+    if (!el) return
+    let info = null
+    try {
+      const r = await fetch('/api/connect-info')
+      if (r.ok) info = await r.json()
+    } catch { /* 网络问题忽略 */ }
+    if (!info?.data) {
+      el.innerHTML = '<p class="hint">（仅电脑端显示二维码：请在这台电脑的浏览器打开本页查看）</p>'
+      return
+    }
+    const d = info.data
+    const tok = encodeURIComponent(d.token || '')
+    const entries = []
+    if (d.lan?.[0]) entries.push({ label: '家里局域网（无需装任何 App，速度最快）', url: `http://${d.lan[0].ip}:${d.port}/#pw-token=${tok}` })
+    if (d.tailscale?.[0]) entries.push({ label: 'Tailscale（校园网 / 出门在外，手机需装 Tailscale 并登录同一账号）', url: `http://${d.tailscale[0].ip}:${d.port}/#pw-token=${tok}` })
+    if (d.tsName) entries.push({ label: 'HTTPS 域名（离线增强，需先开启 tailscale serve）', url: `https://${d.tsName}/#pw-token=${tok}` })
+    if (!entries.length) { el.innerHTML = '<p class="hint">未检测到可用网络地址</p>'; return }
+    el.innerHTML = entries.map((e) => `
+      <div class="qr-item">
+        <div class="qr-label">${esc(e.label)}</div>
+        <img class="qr-img" src="/api/qr?size=220&text=${encodeURIComponent(e.url)}" alt="扫码连接">
+      </div>`).join('')
   }
   $('btn-settings').addEventListener('click', showSettings)
 
@@ -563,12 +614,13 @@
 
   // ---------- 初始化 ----------
   async function init() {
-    // 从"打开"链接带来的令牌（跨地址切换时免重新输入）
+    // 从"打开"链接带来的令牌（跨地址切换 / 扫码配对，免重新输入）
     const frag = location.hash.match(/pw-token=([^&]+)/)
     if (frag) {
       token = decodeURIComponent(frag[1])
       localStorage.setItem(TOKEN_KEY, token)
       history.replaceState(null, '', location.pathname + location.search)
+      setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
     }
     $('list-month').value = localMonth()
     $('stats-month').value = localMonth()

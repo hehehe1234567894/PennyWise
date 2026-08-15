@@ -1,81 +1,58 @@
 # PennyWise 💰
 
-**零手动记账**：粘贴微信/支付宝/银行交易通知（或以后直接分享截图）→ AI 解析 → 一键确认入账。数据全部存在你自己电脑的 SQLite 里，不买服务器，手机通过加密隧道访问。
+**零手动记账**：粘贴微信/支付宝/银行交易通知 → AI 解析 → 一键确认入账。数据全部存在你自己电脑的 SQLite 里，不买服务器；手机扫码即连，在家走内网、在校走 Tailscale，全程自动。
 
-> 架构与设计决策（含校园网与蓝牙评估）见 [docs/architecture.md](docs/architecture.md)
+> 架构与设计决策（校园网、蓝牙评估、检测机制）见 [docs/architecture.md](docs/architecture.md)
 
-## 当前功能（v1）
+## 三步上手（这台电脑已配置好）
 
-- 📝 粘贴交易文本 / 一句话描述 → LLM 解析（金额、方向、商户、分类、账户、置信度）
-- ✅ 解析结果先进入**待确认队列**，一键确认才入账（可当场改任何字段）
-- 🧠 商户分类记忆：同一商户自动套用历史分类，越用越准
-- 📱 手机 PWA：记一笔 / 待处理 / 流水 / 统计 四个页面，支持离线采集（断网先存手机，联网自动补传，重试不重复）
-- 🔐 全部数据在本地 `data/pennywise.db`，复制文件即备份
+1. **电脑**：开机自动在后台运行，无需任何操作。也可以双击桌面的「PennyWise 记账」图标手动打开页面（http://localhost:8720）。
+2. **AI 模型**：DeepSeek Key 已配置。以后要换 Key：打开页面 → 右上角 ⚙ → 设置里粘贴保存（不用碰配置文件）。
+3. **手机配对**：电脑上打开页面 → ⚙ 设置 →「连接手机」处用 **iPhone 相机扫码**：
+   - 在家：扫「局域网」码，无需装任何 App；
+   - 校园网/出门：扫「Tailscale」码（手机装 Tailscale 登录同一账号）。
+   - 扫码后自动完成配对（令牌免输入），再点分享 → **添加到主屏幕**，之后就像用 App 一样。
 
-## 快速开始（电脑端）
+之后手机上：打开 PennyWise → 粘贴交易文本 → 解析 → 看一眼金额商户 → 确认。顶栏会显示当前通道（局域网直连 / Tailscale），网络不通时交易自动存手机、恢复后补传。
 
-1. 安装 [Node.js](https://nodejs.org/)（≥ 22.5，建议 LTS 最新版）
-2. 本目录下安装依赖：`npm install`
-3. 复制配置：把 `.env.example` 复制为 `.env`，填入：
-   - `AUTH_TOKEN`：随便改成一串只有你知道的字符（手机访问时要用）
-   - `LLM_API_KEY`：到 [DeepSeek 开放平台](https://platform.deepseek.com) 注册 → 创建 API Key（充值几块钱能用几个月）
-4. 启动：`npm start`，浏览器打开 http://localhost:8720
+## 日常使用
 
-> 不填 `LLM_API_KEY` 也能用：解析会跳过，交易进入手动确认模式，软件不会报错。
+- **电脑端**：同样可以粘贴记账、看流水/统计；微信/支付宝 PC 客户端复制通知直接粘进来。
+- **数据**：存在 `data/pennywise.db`，备份 = 复制这个文件。
+- **停止/重启服务**：
+  - 停止：`powershell -ExecutionPolicy Bypass -File scripts\stop.ps1`
+  - 启动：双击桌面图标，或运行 `scripts\open.vbs`
+  - 取消开机自启：删除「启动」文件夹里的 `PennyWise.vbs`（Win+R 输入 `shell:startup` 打开）
 
-## 手机接入（iPhone）
+## 换一台电脑时重新部署
 
-1. 手机和电脑都安装 [Tailscale](https://tailscale.com/)（免费），登录**同一个账号**
-2. 电脑上执行一次（让服务获得 HTTPS 证书，手机才能用离线功能）：
-   ```
-   tailscale serve --bg 8720
-   ```
-   > 首次运行会提示需要先在 tailscale.com 给你的 tailnet 开启 HTTPS 证书（按提示链接登录授权即可），然后重新执行该命令。开启之前手机仍可用 `http://<Tailscale的100.x地址>:8720` 访问（功能完整，只是没有离线缓存）。
-3. 手机 Safari 打开 `https://<电脑的Tailscale名称>.<你的tailnet>.ts.net`
-4. 点分享 → **添加到主屏幕** → 打开 PennyWise → 右上角 ⚙ 粘贴 `AUTH_TOKEN` → 保存
+1. 装 [Node.js](https://nodejs.org/)（≥ 22.5），把本目录拷过去；
+2. `npm install` → `npm start`；
+3. 首次运行会自动生成 `.env`（随机令牌）；DeepSeek Key 直接在网页设置里粘贴；
+4. 可选：手机装 Tailscale 登录同一账号，电脑执行 `tailscale serve --bg 8720`（首次需按提示在 tailscale.com 开启 HTTPS 证书），并在 `.env` 填 `TAILSCALE_NAME=电脑名.tailnet.ts.net`。
 
-以后手机在任何网络（宿舍/教室/流量/家里）都能用；宿舍网差时会自动先存在手机里，恢复后自动同步。
+## 换模型 / 成本
 
-**连接自动检测**：手机端会探测所有可用地址（局域网 IP、Tailscale IP、ts.net 域名），**优先局域网直连，连不上自动回退 Tailscale**，顶栏显示当前通道（局域网直连 / Tailscale / 离线）。设置页可查看各地址可达性与延迟，并一键"打开"其他地址（令牌自动随链接带过去，不用重输）。
+模型接口均为 OpenAI 兼容格式，网页设置或 `.env` 三行即可切换：
 
-- **在家**：点设置页里局域网地址的"打开"即可走内网直连，不依赖 Tailscale、速度最快。注意浏览器的混合内容限制：HTTPS 页面不允许直接访问 HTTP 内网地址，所以从 ts.net 域名无法自动切换到局域网，点"打开"链接跳转一次即可。
-- **校园网**：局域网探测不通（AP 隔离），自动走 Tailscale。
-- 若你的 Tailscale 域名不是默认端口 443，在 `.env` 里填 `TAILSCALE_NAME=my-pc.my-tailnet.ts.net` 让检测更完整。
+- 智谱：`LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4`，`LLM_MODEL=glm-4-flash`
+- 阿里：`LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`，`LLM_MODEL=qwen-plus`
+- 本地 Ollama（完全离线）：`LLM_BASE_URL=http://127.0.0.1:11434/v1`，`LLM_MODEL=qwen2.5:7b`
 
-**为什么不用局域网 IP 直连**：校园网通常有 AP 隔离（设备互相不可见），Tailscale 走加密隧道 + 官方中继（TCP 443），不受影响；出门在外也能用。
-
-## 换模型
-
-所有模型接口均为 OpenAI 兼容格式，改 `.env` 三行即可：
-
-- 智谱（GLM）：`LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4`，`LLM_MODEL=glm-4-flash`
-- 阿里（Qwen）：`LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`，`LLM_MODEL=qwen-plus`
-- 本地 Ollama（完全离线、零成本）：`LLM_BASE_URL=http://127.0.0.1:11434/v1`，`LLM_MODEL=qwen2.5:7b`
-
-## 数据与备份
-
-- 数据库：`data/pennywise.db`（SQLite 单文件）——备份 = 复制它
-- 截图等附件（v2 起）：`data/images/`
+DeepSeek 解析一条交易约 ¥0.001，几百笔/月成本几毛到几块钱。
 
 ## 测试
 
-服务启动后运行冒烟测试（`-ExecutionPolicy Bypass` 用于跳过 Windows 默认的脚本执行限制）：
-
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1
-```
-
-测试可重复运行（每次结束自动清理产生的数据）。排查某个文本解析失败时，可直连 API 查看模型原始输出：
-
-```powershell
-node scripts/debug-llm.mjs "支付宝 你收到一笔转账 200.00元 来自：妈妈"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1   # 32 项检查，可重复运行
+node scripts\debug-llm.mjs "支付宝 你收到一笔转账 200.00元 来自：妈妈"   # 查看模型原始输出
 ```
 
 ## 路线图
 
 | 阶段 | 内容 |
 |---|---|
-| v2 | 截图视觉解析（iPhone 快捷指令分享截图 → PC → 视觉模型 → 确认卡片） |
+| v2 | 截图视觉解析（iPhone 分享截图 → 电脑 GLM-4V-Flash → 确认卡片） |
 | v3 | 微信/支付宝账单 CSV 导入 + 自动对账 |
 | v4 | 月报 agent、预算与超额提醒 |
 | v5 | 替代消费方案 agent（联网比价）、可选蓝牙通道 |
@@ -84,14 +61,9 @@ node scripts/debug-llm.mjs "支付宝 你收到一笔转账 200.00元 来自：�
 
 ```
 PennyWise/
-├── server/          # Node 后端（express + 内置 SQLite）
-│   ├── index.js     # 服务入口与全部路由
-│   ├── db.js        # 数据库与规则记忆
-│   ├── llm.js       # LLM 调用与解析提示词
-│   ├── categories.js
-│   └── env.js       # .env 加载
-├── public/          # PWA（零依赖原生 JS）
-├── scripts/         # 冒烟测试
+├── server/          # Node 后端（express + 内置 SQLite + 二维码配对）
+├── public/          # PWA（电脑网页 + 手机 App，零依赖）
+├── scripts/         # 自启/启动/停止脚本、冒烟测试、LLM 调试
 ├── docs/            # 架构决策记录
-└── data/            # 运行时生成：SQLite 数据库
+└── data/            # SQLite 数据库（运行时生成）
 ```
