@@ -683,6 +683,7 @@
       try {
         const d = await api('/api/import-bills', { method: 'POST' })
         const parts = [`新导入 ${d.imported} 条`, `跳过重复 ${d.skipped} 条`]
+        if (d.merged > 0) parts.push(`LLM 合并 ${d.merged} 条`)
         if (d.passwords > 0) parts.push(`识别到 ${d.passwords} 个解压密码`)
         st.textContent = `✓ 完成：${parts.join('，')}${d.error ? '（' + d.error + '）' : ''}`
         refreshAll()

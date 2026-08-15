@@ -333,7 +333,8 @@ export async function parseRowsWithLlm(rows) {
   }
 }
 
-// ---- 导入明细 ----
+// ---- 导入明细（含 LLM 合并审核：账单行 vs 已有记录的疑似重复对，一次批量决策） ----
+
 export async function importBillRows(rows) {
   let imported = 0
   let skipped = 0
@@ -359,8 +360,115 @@ export async function importBillRows(rows) {
   return { imported, skipped }
 }
 
-// 行数据 → 确定性解析（按平台提示）→ 失败 LLM 兜底 → 入库
-export async function importRowsSmart(rows, kindHint) {
+// LLM 合并决策：输入 [{bill:{t,a,d,m,g}, cands:[{id,t,a,m,g}]}]，输出一一对应的 match_id
+export async function llmMergeDecide(items) {
+  const cfg = llmConfig()
+  if (!cfg.enabled) return { ok: false, error: 'no_llm' }
+  const sys = `你是记账对账助手。账单（微信/支付宝/银行导出的权威流水）需要与账本中已有的手记/截图记录合并去重。
+规则：
+1. 同一笔交易同时出现在账单行和已有记录中时，输出 match_id 为那条已有记录的 id（判断依据：时间相近±1天内、金额一致或相差不超过0.5元、商户/对方相同或明显是同一家、方向相同）；
+2. 账单行是新增交易（没有对应已有记录）时 match_id 为 null；
+3. 时间差超过2天或金额差超过0.5元时不要强行匹配；
+4. 只输出一个 JSON 对象：{"decisions":[{"bill_index":0,"match_id":123},{"bill_index":1,"match_id":null},...]}，bill_index 与输入 bills 数组一一对应。`
+  try {
+    const res = await fetch(`${cfg.base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
+        temperature: 0,
+        response_format: { type: 'json_object' },
+      }),
+      signal: AbortSignal.timeout(60000),
+    })
+    if (!res.ok) return { ok: false, error: 'http' + res.status }
+    const j = await res.json()
+    const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    const parsed = JSON.parse(content)
+    if (!Array.isArray(parsed.decisions)) return { ok: false, error: 'bad_decisions' }
+    return { ok: true, decisions: parsed.decisions }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e).slice(0, 100) }
+  }
+}
+
+// 对账主流程：ext_id 去重 → 候选对 → LLM 一次性审核合并 → 应用
+export async function reconcileAndImport(rows) {
+  // 1) 已导入过（ext_id 命中）的直接跳过
+  const fresh = []
+  let skipped = 0
+  for (const r of rows) {
+    if (r.ext_id) {
+      const exist = db.prepare('SELECT id FROM transactions WHERE ext_id = ?').get(r.ext_id)
+      if (exist) { skipped++; continue }
+    }
+    fresh.push(r)
+  }
+  // 2) 每行找候选：无账单单号的既有记录（手记/截图/短信），时间窗 ±40h、金额容差 0.05、同方向
+  const candStmt = db.prepare(`
+    SELECT id, ts, amount, merchant, goods_name, direction, source FROM transactions
+    WHERE status = 'confirmed' AND (ext_id IS NULL OR ext_id = '') AND direction = ? AND amount IS NOT NULL
+      AND amount BETWEEN ? AND ? AND ts BETWEEN ? AND ?
+    ORDER BY ts LIMIT 6
+  `)
+  const pairs = []
+  for (let i = 0; i < fresh.length; i++) {
+    const r = fresh[i]
+    const t = Date.parse(r.ts)
+    if (Number.isNaN(t)) continue
+    const lo = new Date(t - 40 * 3600 * 1000).toISOString()
+    const hi = new Date(t + 40 * 3600 * 1000).toISOString()
+    const cands = candStmt.all(r.direction, r.amount - 0.05, r.amount + 0.05, lo, hi)
+    if (cands.length) pairs.push({ i, bill: r, cands })
+  }
+  // 3) LLM 一次性决策（只有存在疑似重复对时才调用，零候选 = 零 token）
+  const decisions = new Map()
+  if (pairs.length && env('BILL_LLM_MERGE', '1') === '1') {
+    const payload = pairs.map((p) => ({
+      bill: { t: p.bill.ts, a: p.bill.amount, d: p.bill.direction, m: p.bill.merchant, g: p.bill.goods_name },
+      cands: p.cands.map((c) => ({ id: c.id, t: c.ts, a: c.amount, m: c.merchant, g: c.goods_name })),
+    }))
+    const res = await llmMergeDecide(payload)
+    if (res.ok) {
+      for (const d of res.decisions) {
+        if (d && d.bill_index != null && d.match_id != null) {
+          decisions.set(pairs[d.bill_index].i, d.match_id)
+        }
+      }
+    }
+  }
+  // 4) 应用：匹配 → 既有记录挂账单单号（合并）；未匹配 → 插入新行
+  let imported = 0
+  let merged = 0
+  for (let i = 0; i < fresh.length; i++) {
+    const r = fresh[i]
+    const matchId = decisions.get(i)
+    if (matchId) {
+      const rev = nextRev()
+      db.prepare('UPDATE transactions SET ext_id = ?, rev = ?, updated_at = ? WHERE id = ?').run(r.ext_id || null, rev, nowIso(), matchId)
+      merged++
+      continue
+    }
+    const ts = validTs(r.ts) || nowIso()
+    let category = null
+    if (r.direction === 'expense') {
+      const rule = ruleFor(r.merchant)
+      category = rule ? rule.category : '其他'
+    }
+    const rev = nextRev()
+    const now = nowIso()
+    db.prepare(`
+      INSERT INTO transactions (uid, ext_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, source, status, confidence, note, edited, rev, updated_at)
+      VALUES (?,?,?,?,?,'CNY',?,?,?,?,?,?,'csv','confirmed',NULL,?,0,?,?)
+    `).run(newUid(), r.ext_id || null, ts, now, r.amount, r.direction, r.merchant, r.goods_name, category, r.account, r.raw_text, r.note, rev, now)
+    imported++
+  }
+  return { imported, skipped, merged, reviewedPairs: pairs.length }
+}
+
+// 行数据 → 确定性解析（按平台提示）→ 失败 LLM 兜底 → 返回行数组（不入库）
+export async function parseRowsSmart(rows, kindHint) {
   let parsed = null
   if (kindHint === 'wechat') parsed = parseWechatRows(rows)
   else if (kindHint === 'alipay') parsed = parseAlipayRows(rows)
@@ -372,25 +480,25 @@ export async function importRowsSmart(rows, kindHint) {
   }
   if (parsed.error) {
     const llm = await parseRowsWithLlm(rows)
-    if (llm.error) return { imported: 0, skipped: 0, error: llm.error }
-    return await importBillRows(llm.rows)
+    if (llm.error) return { rows: [], error: llm.error }
+    return { rows: llm.rows, error: '' }
   }
-  return await importBillRows(parsed.rows)
+  return { rows: parsed.rows, error: '' }
 }
 
-// 按文件名/内容处理一个账单文件（CSV / XLSX / HTML 表格 / 原始行）
-export async function importBillFile(name, buf, kindHint) {
+// 解析一个账单文件（CSV / XLSX / HTML 表格）为行数组，不入库
+export async function parseBillFile(name, buf, kindHint) {
   const isXlsx = /\.xlsx?$/i.test(name)
   const isHtml = /\.html?$/i.test(name) || /<table/i.test(buf.toString('latin1').slice(0, 4000))
   if (isXlsx) {
     const rows = xlsxToRows(buf)
-    if (!rows.length) return { imported: 0, skipped: 0, error: 'xlsx 无法读取' }
-    return await importRowsSmart(rows, kindHint || (/支付宝/i.test(name) ? 'alipay' : /微信/i.test(name) ? 'wechat' : null))
+    if (!rows.length) return { rows: [], error: 'xlsx 无法读取' }
+    return await parseRowsSmart(rows, kindHint || (/支付宝/i.test(name) ? 'alipay' : /微信/i.test(name) ? 'wechat' : null))
   }
   if (isHtml) {
     const rows = htmlTableToRows(buf.toString('utf8'))
-    if (!rows.length) return { imported: 0, skipped: 0, error: 'HTML 中未找到表格' }
-    return await importRowsSmart(rows, kindHint || 'alipay')
+    if (!rows.length) return { rows: [], error: 'HTML 中未找到表格' }
+    return await parseRowsSmart(rows, kindHint || 'alipay')
   }
   // CSV：先按 GBK 兼容策略读文本
   let text = buf.toString('utf8')
@@ -405,8 +513,15 @@ export async function importBillFile(name, buf, kindHint) {
     if (parsed.error) parsed = parseAlipayRows(parseCsv(text))
     if (parsed.error) parsed = parseBankRows(parseCsv(text))
   }
-  if (parsed.error) return await importRowsSmart(parseCsv(text), kindHint)
-  return await importBillRows(parsed.rows)
+  if (parsed.error) return await parseRowsSmart(parseCsv(text), kindHint)
+  return { rows: parsed.rows, error: '' }
+}
+
+// 手动上传入口：解析 + 对账入库
+export async function importBillFile(name, buf, kindHint) {
+  const parsed = await parseBillFile(name, buf, kindHint)
+  if (parsed.error) return { imported: 0, skipped: 0, merged: 0, error: parsed.error }
+  return await reconcileAndImport(parsed.rows)
 }
 
 // ---- 解压密码：多策略（主题分平台 + 正则 + LLM 兜底） ----
@@ -468,13 +583,12 @@ function savePasswordHistory(list) {
   db.prepare("INSERT INTO meta (k, v) VALUES ('bill_passwords', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(JSON.stringify(list))
 }
 
-// 解压 zip 并导入其中 CSV/XLSX（密码必须显式传给 getData；zipKind 为平台提示）
-export async function tryUnzipImport(filePath, password, zipKind) {
+// 解压 zip 并解析其中 CSV/XLSX 为行数组（密码必须显式传给 getData；zipKind 为平台提示）
+export async function tryUnzipParse(filePath, password, zipKind) {
   try {
     const zip = new AdmZip(filePath)
     const entries = zip.getEntries(password).filter((e) => !e.isDirectory)
-    let imported = 0
-    let skipped = 0
+    const rows = []
     let found = false
     for (const e of entries) {
       const name = e.entryName || ''
@@ -482,16 +596,15 @@ export async function tryUnzipImport(filePath, password, zipKind) {
       if (!/\.(csv|xlsx?)$/i.test(name)) continue
       found = true
       const kindHint = zipKind || (/支付宝/i.test(name) ? 'alipay' : /微信/i.test(name) ? 'wechat' : null)
-      const r = isXlsx
-        ? await importBillFile(name, e.getData(password), kindHint)
-        : await importBillFile(name, e.getData(password), kindHint)
-      imported += r.imported
-      skipped += r.skipped
+      const parsed = isXlsx
+        ? await parseBillFile(name, e.getData(password), kindHint)
+        : await parseBillFile(name, e.getData(password), kindHint)
+      rows.push(...parsed.rows)
     }
-    return { ok: found, imported, skipped, badPassword: false }
+    return { ok: found, rows, badPassword: false }
   } catch (e) {
     const msg = String(e?.message || e)
-    return { ok: false, imported: 0, skipped: 0, badPassword: true, error: msg.slice(0, 100) }
+    return { ok: false, rows: [], badPassword: true, error: msg.slice(0, 100) }
   }
 }
 
@@ -609,8 +722,7 @@ export async function importBills(cfg) {
   const lock = await client.getMailboxLock(cfg.box)
   const newZips = []
   const passwords = []
-  let imported = 0
-  let skipped = 0
+  const allRows = []
   try {
     const since = new Date(Date.now() - 45 * 24 * 3600 * 1000)
     for await (const msg of client.fetch({ since }, { envelope: true, source: true }, { uid: true })) {
@@ -635,9 +747,8 @@ export async function importBills(cfg) {
       for (const f of files) {
         if (/\.zip$/i.test(f.name)) newZips.push({ name: f.name, buffer: f.buffer, kind })
         else if (/\.(csv|xlsx?|html?)$/i.test(f.name)) {
-          const r = await importBillFile(f.name, f.buffer, kind)
-          imported += r.imported
-          skipped += r.skipped
+          const parsed = await parseBillFile(f.name, f.buffer, kind)
+          allRows.push(...parsed.rows)
         }
       }
       // 正文里的账单下载链接（微信账单用链接）
@@ -647,16 +758,14 @@ export async function importBills(cfg) {
         if (!dl) continue
         if (dl.kind === 'zip') newZips.push({ name: 'link-' + Date.now() + '.zip', buffer: dl.buffer, kind })
         else {
-          const r = await importBillFile('link-' + Date.now() + (kind === 'alipay' ? '.xlsx' : '.csv'), dl.buffer, kind)
-          imported += r.imported
-          skipped += r.skipped
+          const parsed = await parseBillFile('link-' + Date.now() + (kind === 'alipay' ? '.xlsx' : '.csv'), dl.buffer, kind)
+          allRows.push(...parsed.rows)
         }
       }
       // 支付宝账单：流水表格直接渲染在正文 HTML 里 → 直接解析表格
       if (kind === 'alipay' && /<table/i.test(text) && /交易号/.test(text)) {
-        const r = await importBillFile('body.html', Buffer.from(text, 'utf8'), 'alipay')
-        imported += r.imported
-        skipped += r.skipped
+        const parsed = await parseBillFile('body.html', Buffer.from(text, 'utf8'), 'alipay')
+        allRows.push(...parsed.rows)
       }
     }
   } finally {
@@ -682,10 +791,9 @@ export async function importBills(cfg) {
     ]
     let done = false
     for (const entry of ordered) {
-      const r = await tryUnzipImport(path.join(INBOX_DIR, p.file), entry.password, p.kind)
+      const r = await tryUnzipParse(path.join(INBOX_DIR, p.file), entry.password, p.kind)
       if (r.ok) {
-        imported += r.imported
-        skipped += r.skipped
+        allRows.push(...r.rows)
         fs.rmSync(path.join(INBOX_DIR, p.file), { force: true })
         done = true
         break
@@ -700,5 +808,10 @@ export async function importBills(cfg) {
   }
   savePendingZips(fresh)
   savePasswordHistory([...passwords, ...passwordHistory()].slice(-20))
-  return { imported, skipped, error: '', files: newZips.length, passwords: passwords.length }
+  // 全部账单行汇总后：一次性对账（LLM 合并审核 + 去重入库）
+  const rec = await reconcileAndImport(allRows)
+  return {
+    imported: rec.imported, skipped: rec.skipped, merged: rec.merged,
+    reviewedPairs: rec.reviewedPairs, error: '', files: newZips.length, passwords: passwords.length,
+  }
 }
