@@ -64,6 +64,11 @@ $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Conten
 Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
 Check 'health reports autoConfirm' ([double]$h.autoConfirm -ge 0 -and [double]$h.autoConfirm -le 1)
 Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.modelStatus.text -and $null -ne $h.modelStatus.vision)
+# 1e. automation extras (SMS auto-capture junk-skip, iOS shortcut download)
+$smsj = (curl.exe -s -X POST -H "X-Auth-Token: $token" -H 'Content-Type: text/plain' --data-binary 'hello 123 test verification code 456789' "$base/api/sms") | ConvertFrom-Json
+Check 'sms junk silently skipped' ($smsj.ok -and $smsj.data.skipped -eq $true)
+$scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut"
+Check 'shortcut file downloadable' ($scCode -eq '200')
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }

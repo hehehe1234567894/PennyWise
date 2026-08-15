@@ -615,6 +615,13 @@
       <h3>连接手机</h3>
       <p class="hint">用 iPhone 相机扫二维码即可自动配对（令牌免输入），扫完建议"添加到主屏幕"当 App 用。</p>
       <div id="qr-panel" class="conn-panel"></div>
+      <p class="hint">银行短信自动记账（0 点击）：<a class="link" href="/shortcut">下载快捷指令</a> → 导入后到「快捷指令 App → 自动化 → 收到信息」选择发卡银行号码并运行它。</p>
+      <h3>账单导入</h3>
+      <p class="hint">配置邮箱后（.env 里 MAIL_* 与 AUTO_IMPORT=1），微信/支付宝账单邮件每 12 小时自动导入一次，完全不用管；也可以手动触发。</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
+      </div>
+      <p id="set-import-status" class="hint"></p>
       <h3>连接</h3>
       <p class="hint">自动检测可用地址，优先局域网直连；在家点"打开"切换到局域网地址更快，校园网会自动走 Tailscale。</p>
       <div id="conn-panel" class="conn-panel"></div>
@@ -663,6 +670,17 @@
       el.innerHTML = '<p class="hint">检测中…</p>'
       const pick = await refreshEndpoints().catch(() => null)
       if (!pick) el.innerHTML = '<p class="hint">所有地址都不可达，请检查电脑是否开机、服务是否启动</p>'
+    })
+    $('set-import').addEventListener('click', async () => {
+      const st = $('set-import-status')
+      st.textContent = '导入中…'
+      try {
+        const d = await api('/api/import-bills', { method: 'POST' })
+        st.textContent = `✓ 完成：新导入 ${d.imported} 条，跳过重复 ${d.skipped} 条${d.error ? '（' + d.error + '）' : ''}`
+        refreshAll()
+      } catch (e) {
+        st.textContent = '✗ ' + e.message
+      }
     })
     renderConnPanel()
     renderQrPanel()

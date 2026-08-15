@@ -60,8 +60,11 @@ if (!cols.includes('goods_name')) {
 if (!cols.includes('uid')) db.exec('ALTER TABLE transactions ADD COLUMN uid TEXT')
 if (!cols.includes('updated_at')) db.exec("ALTER TABLE transactions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
 if (!cols.includes('rev')) db.exec('ALTER TABLE transactions ADD COLUMN rev INTEGER NOT NULL DEFAULT 0')
+// v4 账单导入：外部交易单号去重（微信交易单号/支付宝交易号）
+if (!cols.includes('ext_id')) db.exec('ALTER TABLE transactions ADD COLUMN ext_id TEXT')
 db.exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid) WHERE uid IS NOT NULL AND uid != '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_ext ON transactions(ext_id) WHERE ext_id IS NOT NULL AND ext_id != '';
 CREATE TABLE IF NOT EXISTS tombstones (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 `)

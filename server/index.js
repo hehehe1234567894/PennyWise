@@ -7,6 +7,8 @@ import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseCapture, parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
+import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv } from './importer.js'
+import { shortcutFile } from './shortcut.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
@@ -88,6 +90,7 @@ app.get('/api/health', (req, res) => {
     hasVision: v.enabled, visionModel: v.model, visionModels: v.models,
     autoConfirm: autoConfirmAt(),
     modelStatus: getModelStatus(),
+    billImport: { enabled: billStatus.enabled || mailConfig().enabled, ...billStatus },
   })
 })
 
@@ -192,22 +195,12 @@ app.delete('/api/categories/:name', (req, res) => {
   res.json({ ok: true, data: getCategories() })
 })
 
-// ---- 采集：文本 → LLM 解析 → 待确认 ----
-app.post('/api/capture', async (req, res) => {
-  const { text, ts, client_id: cid } = req.body || {}
-  if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
-  const clientId = cid ? String(cid).slice(0, 64) : null
-
-  // 幂等：离线队列重试时不会重复入库
-  if (clientId) {
-    const exist = db.prepare('SELECT * FROM transactions WHERE client_id = ?').get(clientId)
-    if (exist) return res.json({ ok: true, data: { transaction: exist, parse: { code: 'duplicate' } } })
-  }
-
+// ---- 采集：文本 → LLM 解析 → 待确认（或高置信度自动入账） ----
+async function captureTextCore(text, clientId, sourceLabel) {
   const raw = text.trim().slice(0, 4000)
   const result = await parseCapture(raw)
   let fields = {
-    ts: validTs(ts) || nowIso(), amount: null, direction: 'expense', merchant: '',
+    ts: nowIso(), amount: null, direction: 'expense', merchant: '',
     goods_name: '', category: null, account: 'other', note: '', confidence: null,
   }
   let parse = { code: 'no_key' }
@@ -234,14 +227,83 @@ app.post('/api/capture', async (req, res) => {
 
   const info = db.prepare(`
     INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, 'text', ?, ?, ?, 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
     fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, raw, null, status, fields.confidence, fields.note, nextRev(), nowIso(),
+    fields.account, raw, null, sourceLabel, status, fields.confidence, fields.note, nextRev(), nowIso(),
   )
+  return { transaction: getTx(info.lastInsertRowid), parse }
+}
 
-  res.status(201).json({ ok: true, data: { transaction: getTx(info.lastInsertRowid), parse } })
+app.post('/api/capture', async (req, res) => {
+  const { text, ts, client_id: cid } = req.body || {}
+  if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
+  const clientId = cid ? String(cid).slice(0, 64) : null
+
+  // 幂等：离线队列重试时不会重复入库
+  if (clientId) {
+    const exist = db.prepare('SELECT * FROM transactions WHERE client_id = ?').get(clientId)
+    if (exist) return res.json({ ok: true, data: { transaction: exist, parse: { code: 'duplicate' } } })
+  }
+
+  const r = await captureTextCore(text, clientId, 'text')
+  res.status(201).json({ ok: true, data: r })
+})
+
+// ---- 银行短信自动记账（iOS 快捷指令「收到短信」自动化调用，0 点击） ----
+app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (req, res) => {
+  const text = String(req.body || '').trim()
+  if (!text) return fail(res, 400, 'bad_request', '短信内容为空')
+  const r = await captureTextCore(text, null, 'sms')
+  // 解析不出金额的（验证码/通知类短信）静默丢弃，不产生垃圾记录
+  if (r.parse.code !== 'ok' || r.transaction.amount == null) {
+    db.prepare('DELETE FROM transactions WHERE id = ?').run(r.transaction.id)
+    return res.json({ ok: true, data: { skipped: true, reason: '非交易短信' } })
+  }
+  res.json({ ok: true, data: { skipped: false, transaction: r.transaction } })
+})
+
+// ---- 账单导入（微信/支付宝 CSV，邮箱自动收取或手动上传） ----
+const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, error: '' }
+async function runBillImport() {
+  billStatus.enabled = mailConfig().enabled
+  try {
+    const r = await importBills(mailConfig())
+    billStatus.lastRun = nowIso()
+    billStatus.imported = r.imported
+    billStatus.skipped = r.skipped
+    billStatus.error = r.error || ''
+    return r
+  } catch (e) {
+    billStatus.lastRun = nowIso()
+    billStatus.error = String(e?.message || e).slice(0, 200)
+    return { imported: 0, skipped: 0, error: billStatus.error }
+  }
+}
+app.post('/api/import-bills', async (req, res) => {
+  if (!mailConfig().enabled) return fail(res, 400, 'not_configured', '未配置邮箱（.env 里的 MAIL_USER/MAIL_PASS 与 AUTO_IMPORT=1），见 README')
+  res.json({ ok: true, data: await runBillImport() })
+})
+app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb' }), async (req, res) => {
+  const kind = req.query.kind === 'alipay' ? 'alipay' : 'wechat'
+  let parsed
+  if (kind === 'alipay') parsed = parseAlipayCsv(req.body)
+  else parsed = parseWechatCsv(req.body.toString('utf8'))
+  if (parsed.error) return fail(res, 400, 'parse_error', parsed.error)
+  res.json({ ok: true, data: await importBillRows(parsed.rows) })
+})
+
+// ---- iOS 快捷指令下载（银行短信自动记账） ----
+app.get('/shortcut', (req, res) => {
+  const { lan, tailscale } = scanInterfaces()
+  const tsName = env('TAILSCALE_NAME', '').replace(/\/+$/, '')
+  const base = tsName ? `https://${tsName}` : tailscale[0] ? `http://${tailscale[0].ip}:${PORT}` : lan[0] ? `http://${lan[0].ip}:${PORT}` : `http://localhost:${PORT}`
+  const buf = shortcutFile(base, AUTH_TOKEN)
+  res.set('Content-Type', 'application/octet-stream')
+  res.set('Content-Disposition', 'attachment; filename="PennyWise-SMS.shortcut"')
+  res.set('Cache-Control', 'no-store')
+  res.send(buf)
 })
 
 // ---- 采集：支付截图 → 视觉模型解析 → 待确认 ----
@@ -576,6 +638,11 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
+  // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次
+  if (mailConfig().enabled) {
+    setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
+    setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
+  }
   console.log('')
   console.log('  PennyWise 已启动')
   console.log(`  本机访问:   http://localhost:${PORT}`)
