@@ -79,6 +79,41 @@
     return pick
   }
 
+  // ---------- 模型状态提示（欠费/无效 Key/异常时才显示，正常时完全静默） ----------
+  const MODEL_ERR_LABEL = {
+    insufficient_balance: 'AI 模型欠费', invalid_key: 'API Key 无效', rate_limited: 'AI 请求过于频繁',
+    model_not_found: 'AI 模型不存在', no_key: '未配置 AI 模型', api_error: 'AI 服务异常',
+    network: '无法连接 AI 服务', bad_json: 'AI 返回格式异常', all_failed: '识别模型全部不可用', unknown: 'AI 服务异常',
+  }
+  let modelStatusCache = { text: { ok: true }, vision: { ok: true } }
+
+  function modelAlertMsgs(ms) {
+    const parts = []
+    const t = ms?.text
+    if (t && t.ok === false) parts.push(`文字解析：${MODEL_ERR_LABEL[t.code] || 'AI 服务异常'}，交易将进入手动确认`)
+    const v = ms?.vision
+    if (v && v.ok === false) parts.push(`截图识别：${MODEL_ERR_LABEL[v.code] || 'AI 服务异常'}`)
+    return parts
+  }
+  function updateModelAlert(ms) {
+    if (ms) modelStatusCache = ms
+    const el = $('model-alert')
+    const msgs = modelAlertMsgs(modelStatusCache)
+    if (msgs.length) {
+      el.innerHTML = `⚠ ${esc(msgs.join('；'))}。点此查看修复方法`
+      el.classList.remove('hidden')
+    } else {
+      el.classList.add('hidden')
+    }
+  }
+  async function refreshModelAlert() {
+    try {
+      const h = await api('/api/health')
+      updateModelAlert(h.modelStatus)
+    } catch (e) { /* 网络问题时不打扰 */ }
+  }
+  $('model-alert').addEventListener('click', () => showSettings())
+
   // ---------- 网络层 ----------
   async function api(path, opts = {}) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {})
@@ -357,9 +392,10 @@
       } else {
         if (parse.code === 'ok') toast('识别完成，请确认')
         else if (parse.code === 'duplicate') toast('这条已经存在')
-        else toast('识别失败（' + (parse.error || parse.code) + '），请手动填写')
+        else toast('截图识别失败（' + (MODEL_ERR_LABEL[parse.code] || parse.code) + '），已转手动填写')
         openEditor('parse', transaction)
       }
+      refreshModelAlert().catch(() => {})
       refreshAll()
     } catch (e) {
       if (/网络|令牌/.test(e.message)) {
@@ -391,12 +427,15 @@
       if (transaction.status === 'confirmed') {
         toast(`已自动入账 ✓（置信度 ${Math.round((transaction.confidence || 0) * 100)}%）`)
       } else {
-        if (parse.code === 'no_key') toast('未配置 AI 模型，请手动填写确认')
+        if (parse.code === 'no_key') toast('未配置 AI 模型，已转手动确认')
+        else if (parse.code === 'insufficient_balance') toast('⚠ AI 模型欠费，已转手动确认')
+        else if (parse.code === 'invalid_key') toast('⚠ API Key 无效，已转手动确认')
         else if (parse.code === 'ok') toast('解析完成，请确认')
         else if (parse.code === 'duplicate') toast('这条已经存在')
-        else toast('解析失败（' + parse.code + '），已转手动确认')
+        else toast('AI 解析失败（' + (MODEL_ERR_LABEL[parse.code] || parse.code) + '），已转手动确认')
         openEditor('parse', transaction)
       }
+      refreshModelAlert().catch(() => {})
       refreshAll()
     } catch (e) {
       if (/网络|令牌/.test(e.message)) {
@@ -541,6 +580,18 @@
 
   // ---------- 设置 ----------
   function showSettings() {
+    // AI 区块只在模型异常时出现；一切正常则完全不显示模型相关内容
+    const msgs = modelAlertMsgs(modelStatusCache)
+    const aiSection = msgs.length ? `
+      <h3>AI 模型（异常，需处理）</h3>
+      <p class="hint warn-text">${esc(msgs.join('；'))}</p>
+      <p class="hint">充值 / 更换 API Key 后点保存，提示会自动消失。DeepSeek 控制台：platform.deepseek.com；视觉模型（阿里云百炼）：bailian.console.aliyun.com。</p>
+      <label>DeepSeek API Key（文字解析）<input id="set-llm" type="password" autocomplete="off" placeholder="sk-..."></label>
+      <div class="btn-row">
+        <button type="button" class="btn" id="set-llm-save">保存并重试</button>
+      </div>
+      <p id="set-llm-status" class="hint"></p>` : ''
+
     openModal('设置', `
       <p class="hint">首次在手机上使用时，把电脑 <code>.env</code> 里的 AUTH_TOKEN 粘贴到这里。</p>
       <label>访问令牌<input id="set-token" type="password" autocomplete="off"></label>
@@ -549,13 +600,7 @@
         <button type="button" class="btn btn-primary" id="set-save">保存并测试</button>
       </div>
       <p id="set-status" class="hint"></p>
-      <h3>AI 模型</h3>
-      <p class="hint">交易解析用的 API Key（在 <code>platform.deepseek.com</code> 注册获取）。留空则解析跳过、手动确认。</p>
-      <label>DeepSeek API Key<input id="set-llm" type="password" autocomplete="off" placeholder="sk-..."></label>
-      <div class="btn-row">
-        <button type="button" class="btn" id="set-llm-save">保存</button>
-      </div>
-      <p id="set-llm-status" class="hint"></p>
+      ${aiSection}
       <h3>自动化</h3>
       <p class="hint">解析置信度达到阈值就直接入账，不弹确认框；1.0 = 全部手动确认。</p>
       <label>自动入账阈值
@@ -581,22 +626,27 @@
       token = $('set-token').value.trim()
       localStorage.setItem(TOKEN_KEY, token)
       try {
-        const h = await api('/api/health')
-        $('set-status').textContent = '✓ 连接成功' + (h.hasLLM ? `，AI 模型 ${h.model} 已就绪` : '（未配置 LLM_API_KEY，手动模式）')
+        await api('/api/health')
+        $('set-status').textContent = '✓ 连接成功'
       } catch (e) {
         $('set-status').textContent = '✗ 连接失败：' + e.message
       }
     })
-    // AI Key 保存（服务器回写 .env 并立即生效，无需重启）
-    $('set-llm-save').addEventListener('click', async () => {
-      const key = $('set-llm').value.trim()
-      try {
-        const d = await api('/api/settings', { method: 'POST', body: { llm_api_key: key } })
-        $('set-llm-status').textContent = d.llmConfigured ? '✓ 已保存并生效' : '✓ 已清空（手动模式）'
-      } catch (e) {
-        $('set-llm-status').textContent = '✗ 保存失败：' + e.message
-      }
-    })
+    // AI Key 保存（仅异常时存在该区块；服务器回写 .env 并立即生效）
+    const llmSave = $('set-llm-save')
+    if (llmSave) {
+      llmSave.addEventListener('click', async () => {
+        const key = $('set-llm').value.trim()
+        try {
+          const d = await api('/api/settings', { method: 'POST', body: { llm_api_key: key } })
+          $('set-llm-status').textContent = d.llmConfigured ? '✓ 已保存并生效' : '✓ 已清空（手动模式）'
+          await refreshModelAlert()
+          if (!modelAlertMsgs(modelStatusCache).length) { closeModal(); toast('模型已恢复 ✓') }
+        } catch (e) {
+          $('set-llm-status').textContent = '✗ 保存失败：' + e.message
+        }
+      })
+    }
     // 自动入账阈值（保存到服务器，对所有设备生效）
     $('set-autoconfirm').addEventListener('change', async () => {
       const v = Number($('set-autoconfirm').value)
@@ -616,9 +666,8 @@
     })
     renderConnPanel()
     renderQrPanel()
-    // 回填当前 AI Key 状态与自动入账阈值
+    // 回填自动入账阈值（模型相关内容仅在异常区块显示）
     api('/api/health').then((h) => {
-      if (h.hasLLM) $('set-llm-status').textContent = `当前模型 ${h.model} 已就绪 ✓`
       const sel = $('set-autoconfirm')
       if (sel) {
         const cur = String(h.autoConfirm ?? 0.9)
@@ -742,6 +791,7 @@
         }
       }
     } catch (e) { /* 稍后重试 */ }
+    refreshModelAlert().catch(() => {})
     updateChip()
     refreshAll()
   }
@@ -853,6 +903,7 @@
     })
     try { indexedDB.deleteDatabase('pw-outbox') } catch (e) { /* 清理旧版离线队列 */ }
     refreshEndpoints().catch(() => {})
+    refreshModelAlert().catch(() => {})
     // 分类：在线拉取并缓存到本地，离线用缓存
     try {
       categories = await api('/api/categories')

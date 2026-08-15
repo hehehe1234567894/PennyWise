@@ -32,9 +32,39 @@ export const SYSTEM_PROMPT = `你是"PennyWise"个人记账系统的交易解析
 
 输出必须是一个合法的 JSON 对象，键为上述字段名。`
 
+// ================= 模型状态跟踪（欠费/无效 Key/网络异常 → 界面提示） =================
+const modelStatus = {
+  text: { ok: true, at: null, code: null, detail: '' },
+  vision: { ok: true, at: null, code: null, detail: '' },
+}
+export function getModelStatus() {
+  return { text: { ...modelStatus.text }, vision: { ...modelStatus.vision } }
+}
+export function noteModelResult(kind, ok, code, detail) {
+  const m = modelStatus[kind]
+  if (ok) {
+    m.ok = true; m.at = new Date().toISOString(); m.code = null; m.detail = ''
+  } else {
+    m.ok = false; m.at = new Date().toISOString(); m.code = code || 'unknown'; m.detail = String(detail || '').slice(0, 200)
+  }
+}
+
+// 把模型 API 的错误归类为可读状态码
+export function classifyLlmError(status, bodyText) {
+  const t = String(bodyText || '').toLowerCase()
+  if (status === 402 || /insufficient balance|arrearage|欠费|余额不足|not enough balance|账户余额不足/i.test(t)) return 'insufficient_balance'
+  if (status === 401 || /invalid.*api[ -]?key|api[ -]?key.*(invalid|wrong)|authentication|unauthorized/i.test(t)) return 'invalid_key'
+  if (status === 429 || /rate limit|too many requests|请求过于频繁/i.test(t)) return 'rate_limited'
+  if (status === 404 || /model.*not\s*(found|exist)|no such model/i.test(t)) return 'model_not_found'
+  return 'api_error'
+}
+
 export async function parseCapture(text, { timeoutMs = 30000 } = {}) {
   const cfg = llmConfig()
-  if (!cfg.enabled) return { ok: false, code: 'no_key', error: '未配置 LLM_API_KEY，进入手动记账模式' }
+  if (!cfg.enabled) {
+    noteModelResult('text', false, 'no_key', '未配置 LLM_API_KEY')
+    return { ok: false, code: 'no_key', error: '未配置 LLM_API_KEY，进入手动记账模式' }
+  }
   const body = {
     model: cfg.model,
     messages: [
@@ -53,13 +83,22 @@ export async function parseCapture(text, { timeoutMs = 30000 } = {}) {
     })
     if (!res.ok) {
       const t = await res.text().catch(() => '')
-      return { ok: false, code: `http_${res.status}`, error: t.slice(0, 300) }
+      const code = classifyLlmError(res.status, t)
+      noteModelResult('text', false, code, t)
+      return { ok: false, code, error: t.slice(0, 300) }
     }
     const json = await res.json()
     let content = json?.choices?.[0]?.message?.content ?? ''
     content = String(content).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
-    return { ok: true, data: sanitize(JSON.parse(content)) }
+    const data = sanitize(JSON.parse(content))
+    noteModelResult('text', true)
+    return { ok: true, data }
   } catch (e) {
+    if (e instanceof SyntaxError) {
+      noteModelResult('text', false, 'bad_json', e.message)
+      return { ok: false, code: 'bad_json', error: '模型未返回合法 JSON' }
+    }
+    noteModelResult('text', false, 'network', e?.message || e)
     return { ok: false, code: 'network', error: String(e?.message || e).slice(0, 300) }
   }
 }
@@ -114,16 +153,23 @@ const VISION_SYSTEM_PROMPT = `你是"PennyWise"记账系统的支付截图解析
 
 export async function parseImage(buffer, mime, { timeoutMs = 30000 } = {}) {
   const cfg = visionConfig()
-  if (!cfg.enabled) return { ok: false, code: 'no_key', error: '未配置 VISION_API_KEY，无法识别截图' }
+  if (!cfg.enabled) {
+    noteModelResult('vision', false, 'no_key', '未配置 VISION_API_KEY')
+    return { ok: false, code: 'no_key', error: '未配置 VISION_API_KEY，无法识别截图' }
+  }
   const dataUrl = `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}`
 
   // 按序降级：依次尝试模型链，全部失败才报错
   const errors = []
   for (const model of cfg.models) {
     const r = await tryVisionModel(cfg, model, dataUrl, timeoutMs)
-    if (r.ok) return r
+    if (r.ok) {
+      noteModelResult('vision', true)
+      return r
+    }
     errors.push(`${model}: ${r.error || r.code}`)
   }
+  noteModelResult('vision', false, 'all_failed', errors.join(' | '))
   return { ok: false, code: 'all_failed', error: errors.join(' | ').slice(0, 400) }
 }
 
@@ -152,7 +198,7 @@ async function tryVisionModel(cfg, model, dataUrl, timeoutMs) {
     })
     if (!res.ok) {
       const t = await res.text().catch(() => '')
-      return { ok: false, code: `http_${res.status}`, error: t.slice(0, 200) }
+      return { ok: false, code: classifyLlmError(res.status, t), error: t.slice(0, 200) }
     }
     const json = await res.json()
     let content = json?.choices?.[0]?.message?.content ?? ''

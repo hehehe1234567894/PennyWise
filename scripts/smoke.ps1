@@ -63,6 +63,7 @@ Check 'connect-info available on localhost without token' ($ci.ok -and $ci.data.
 $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Content-Type-Options|X-Frame-Options'
 Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
 Check 'health reports autoConfirm' ([double]$h.autoConfirm -ge 0 -and [double]$h.autoConfirm -le 1)
+Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.modelStatus.text -and $null -ne $h.modelStatus.vision)
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }

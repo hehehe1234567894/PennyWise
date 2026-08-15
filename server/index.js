@@ -6,7 +6,7 @@ import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
-import { parseCapture, parseImage, llmConfig, visionConfig } from './llm.js'
+import { parseCapture, parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
@@ -87,6 +87,7 @@ app.get('/api/health', (req, res) => {
     hasLLM: llmConfig().enabled, model: llmConfig().model,
     hasVision: v.enabled, visionModel: v.model, visionModels: v.models,
     autoConfirm: autoConfirmAt(),
+    modelStatus: getModelStatus(),
   })
 })
 
@@ -155,6 +156,7 @@ app.post('/api/settings', (req, res) => {
   if (b.llm_api_key !== undefined) {
     const key = String(b.llm_api_key).trim().slice(0, 200)
     writeEnv('LLM_API_KEY', key)
+    noteModelResult('text', true) // 用户更新了 Key：清除欠费/无效提示，等下一次调用重新判定
     changes.llmConfigured = Boolean(key)
   }
   if (b.auto_confirm !== undefined) {
