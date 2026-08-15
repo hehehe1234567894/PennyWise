@@ -3,7 +3,7 @@ import express from 'express'
 import { env, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth } from './db.js'
 import { parseCapture, llmConfig } from './llm.js'
-import { DIRECTIONS, ACCOUNTS } from './categories.js'
+import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
@@ -39,6 +39,15 @@ app.post('/api/categories', (req, res) => {
   const k = kind === 'income' ? 'income' : 'expense'
   if (!n) return fail(res, 400, 'bad_request', '分类名不能为空')
   db.prepare('INSERT OR IGNORE INTO categories (name, kind) VALUES (?, ?)').run(n, k)
+  res.json({ ok: true, data: getCategories() })
+})
+
+app.delete('/api/categories/:name', (req, res) => {
+  const n = String(req.params.name || '').trim().slice(0, 20)
+  if (!n) return fail(res, 400, 'bad_request', '分类名不能为空')
+  const defaults = [...DEFAULT_CATEGORIES.expense, ...DEFAULT_CATEGORIES.income]
+  if (defaults.includes(n)) return fail(res, 400, 'bad_request', '默认分类不能删除')
+  db.prepare('DELETE FROM categories WHERE name = ?').run(n)
   res.json({ ok: true, data: getCategories() })
 })
 

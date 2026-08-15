@@ -58,6 +58,12 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1
 ```
 
+测试可重复运行（每次结束自动清理产生的数据）。排查某个文本解析失败时，可直连 API 查看模型原始输出：
+
+```powershell
+node scripts/debug-llm.mjs "支付宝 你收到一笔转账 200.00元 来自：妈妈"
+```
+
 ## 路线图
 
 | 阶段 | 内容 |

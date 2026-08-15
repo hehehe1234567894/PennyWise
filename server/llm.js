@@ -7,8 +7,7 @@ export function llmConfig() {
   return { base, apiKey, model, enabled: Boolean(apiKey) }
 }
 
-const SYSTEM_PROMPT = `你是"PennyWise"个人记账系统的交易解析器。用户会把微信/支付宝/银行卡的交易通知或一句话描述发给你。你只输出一个 JSON 对象，不要输出任何其他文字、解释或代码块标记。
-
+export const SYSTEM_PROMPT = `你是"PennyWise"个人记账系统的交易解析器。用户会把微信/支付宝/银行卡的交易通知或一句话描述发给你。你只输出一个 JSON 对象，不要输出任何其他文字、解释或代码块标记。
 字段说明：
 - amount: 交易金额（人民币元，正数，最多两位小数）；无法确定时填 null
 - direction: "expense"(支出) | "income"(收入) | "refund"(退款) | "transfer"(转账)
@@ -19,12 +18,15 @@ const SYSTEM_PROMPT = `你是"PennyWise"个人记账系统的交易解析器。�
 - note: 简短备注（如"红包""代付"），没有填 ""
 - confidence: 0 到 1 之间的置信度，表示你对整体解析结果的把握
 
-判定规则：
-1. "收款/入账/到账/红包收到" → income；明确提到"退款"且钱是退回给你的 → refund；"支付/付款/消费/扣款/购买" → expense；只有"转账"且无方向 → transfer
-2. 金额可能写作 "¥18.50"、"18.5元"、"1,234.56"，去掉千分位逗号；只提取与交易本身相关的数字
-3. 示例：
+判定规则（按顺序执行）：
+1. account 判定（最先做）：文本含"微信支付/微信" → "wechat"；含"支付宝" → "alipay"；含"银行/储蓄卡/信用卡/尾号" → "bank"；都没有 → "other"
+2. 方向："收款/入账/到账/红包收到" → income；明确提到"退款"且钱是退回给你的 → refund；"支付/付款/消费/扣款/购买" → expense；只有"转账"且无方向 → transfer
+3. merchant 判定（必填，不许因为拿不准就填空）：支出时填收款商户名；收入/转账时填"来自/转自/对方"后面的名字（如"来自：妈妈" → "妈妈"）；实在找不到对方才填 ""
+4. 金额可能写作 "¥18.50"、"18.5元"、"1,234.56"，去掉千分位逗号；只提取与交易本身相关的数字
+5. 示例：
 "微信支付 收款方：全家便利店 ¥18.50" → {"amount":18.5,"direction":"expense","merchant":"全家便利店","category":"餐饮","account":"wechat","ts":null,"note":"","confidence":0.9}
-"支付宝 你收到一笔转账 200.00元 来自：妈妈" → {"amount":200,"direction":"income","merchant":"妈妈","category":null,"account":"alipay","ts":null,"note":"转账","confidence":0.85}
+"支付宝 你收到一笔转账 200.00元 来自：妈妈" → {"amount":200,"direction":"income","merchant":"妈妈","category":null,"account":"alipay","ts":null,"note":"转账","confidence":0.9}
+"您尾号8888的储蓄卡收入人民币500.00元，交易对方：京东商城" → {"amount":500,"direction":"income","merchant":"京东商城","category":null,"account":"bank","ts":null,"note":"","confidence":0.85}
 "招商银行 尾号1234 储蓄卡 支出人民币58.00元 沃尔玛" → {"amount":58,"direction":"expense","merchant":"沃尔玛","category":"购物","account":"bank","ts":null,"note":"","confidence":0.9}
 "买了一杯奶茶 13元" → {"amount":13,"direction":"expense","merchant":"奶茶店","category":"餐饮","account":"other","ts":null,"note":"","confidence":0.6}
 

@@ -27,7 +27,7 @@ function Call($method, $path, $body = $null, $withToken = $true) {
 }
 function StatusOf($method, $path, $body = $null) {
   try {
-    $r = Invoke-WebRequest -Method $method -Uri "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
+    $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
     return $r.StatusCode
   } catch { return [int]$_.Exception.Response.StatusCode.value__ }
 }
@@ -49,12 +49,15 @@ $txId = $c.data.transaction.id
 
 # 4. idempotency via client_id (offline outbox retry must not duplicate)
 $dup = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = "smoke-dup-$([guid]::NewGuid())" }
+$dupId = $dup.data.transaction.id
 $dup2 = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = $dup.data.transaction.client_id }
 Check 'outbox retry is idempotent' ($dup2.data.parse.code -eq 'duplicate')
 
-# 5. register a custom category (also exercises the categories API)
-$cat = Call POST '/api/categories' @{ name = 'Dining'; kind = 'expense' }
-Check 'register custom category' ($cat.ok -and $cat.data.expense -contains 'Dining')
+# 5. register a custom category (also exercises the categories API; idempotent)
+$catsBefore = (Call GET '/api/categories').data
+if ($catsBefore.expense -notcontains 'Dining') { Call POST '/api/categories' @{ name = 'Dining'; kind = 'expense' } | Out-Null }
+$catsAfter = (Call GET '/api/categories').data
+Check 'register custom category' ($catsAfter.expense -contains 'Dining')
 
 # 6. confirm with overrides
 $cf = Call POST "/api/transactions/$txId/confirm" @{ overrides = @{ amount = 18.5; direction = 'expense'; merchant = 'FamilyMart'; category = 'Dining'; account = 'wechat'; note = 'smoke' } }
@@ -82,9 +85,16 @@ Check 'seeded expense categories present' ($cats.expense.Count -ge 5)
 
 # 9. static PWA assets
 foreach ($p in '/', '/app.js', '/styles.css', '/sw.js', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png') {
-  $r = Invoke-WebRequest -Uri "$base$p" -ErrorAction SilentlyContinue
+  $r = Invoke-WebRequest -UseBasicParsing -Uri "$base$p" -ErrorAction SilentlyContinue
   Check "static $p" ($null -ne $r -and $r.StatusCode -eq 200)
 }
+
+# 10. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
+Call DELETE "/api/transactions/$txId" | Out-Null
+Call DELETE "/api/transactions/$dupId" | Out-Null
+Call DELETE '/api/categories/Dining' | Out-Null
+$final = Call GET '/api/summary'
+Check 'cleanup restores empty ledger' ([math]::Abs($final.data.expense) -lt 0.001)
 
 Write-Host ''
 Write-Host "Result: $pass passed, $fail failed" -ForegroundColor $(if ($fail -eq 0) { 'Green' } else { 'Red' })
