@@ -1,6 +1,11 @@
-import { env } from './env.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { env, DATA_DIR } from './env.js'
 import { db, ruleFor, nowIso, validTs, newUid, nextRev } from './db.js'
 import { ImapFlow } from 'imapflow'
+import AdmZip from 'adm-zip'
+
+const INBOX_DIR = path.join(DATA_DIR, 'inbox')
 
 // ================= 账单导入（微信/支付宝 CSV + 邮箱自动收取） =================
 
@@ -222,7 +227,70 @@ export async function importBillRows(rows) {
   return { imported, skipped }
 }
 
-// 从邮箱收取账单附件并导入
+// 按文件名选解析器；名字不明确时依次尝试 微信 → 支付宝 → 银行
+export async function importCsvByName(name, buf) {
+  const isAli = /alipay|支付宝/i.test(name)
+  const isWx = /wechat|微信/i.test(name)
+  let parsed
+  if (isAli) parsed = parseAlipayCsv(buf)
+  else if (isWx) parsed = parseWechatCsv(buf.toString('utf8'))
+  else {
+    parsed = parseWechatCsv(buf.toString('utf8'))
+    if (parsed.error) parsed = parseAlipayCsv(buf)
+    if (parsed.error) parsed = parseBankCsv(buf)
+  }
+  if (parsed.error) return { imported: 0, skipped: 0, error: parsed.error }
+  return await importBillRows(parsed.rows)
+}
+
+// ---- 微信/支付宝账单 = 加密 zip + 单独一封解压密码邮件 → 自动配对 ----
+
+export function extractPassword(subject, text) {
+  const s = String(subject || '') + '\n' + String(text || '')
+  if (!/密码/.test(s)) return null
+  const m = s.match(/解压密码[：: ]*(?:是|为)?\s*([A-Za-z0-9]{4,16})/)
+    || s.match(/密码[：: ]*(?:是|为)?\s*(\d{4,8})/)
+  return m ? m[1] : null
+}
+
+function pendingZips() {
+  try { return JSON.parse(db.prepare("SELECT v FROM meta WHERE k = 'pending_zips'").get()?.v || '[]') } catch { return [] }
+}
+function savePendingZips(list) {
+  db.prepare("INSERT INTO meta (k, v) VALUES ('pending_zips', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(JSON.stringify(list))
+}
+function passwordHistory() {
+  try { return JSON.parse(db.prepare("SELECT v FROM meta WHERE k = 'bill_passwords'").get()?.v || '[]') } catch { return [] }
+}
+function savePasswordHistory(list) {
+  db.prepare("INSERT INTO meta (k, v) VALUES ('bill_passwords', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(JSON.stringify(list))
+}
+
+// 尝试用密码解压并导入 zip 内 CSV；返回 { ok, imported, skipped, badPassword }
+export async function tryUnzipImport(filePath, password) {
+  try {
+    const zip = new AdmZip(filePath)
+    const entries = zip.getEntries(password).filter((e) => !e.isDirectory)
+    let imported = 0
+    let skipped = 0
+    let found = false
+    for (const e of entries) {
+      const name = e.entryName || ''
+      if (!/\.csv/i.test(name)) continue
+      found = true
+      // 密码必须显式传给 getData（加密 zip 的 ZipCrypto 解密在这里发生）
+      const r = await importCsvByName(name, e.getData(password))
+      imported += r.imported
+      skipped += r.skipped
+    }
+    return { ok: found, imported, skipped, badPassword: false }
+  } catch (e) {
+    const msg = String(e?.message || e)
+    return { ok: false, imported: 0, skipped: 0, badPassword: true, error: msg.slice(0, 100) }
+  }
+}
+
+// 从邮箱收取账单附件并导入（zip 与密码邮件顺序无关，自动配对）
 export async function importBills(cfg) {
   if (!cfg.billsEnabled) return { imported: 0, skipped: 0, error: '未配置账单邮件导入（MAIL_* / AUTO_IMPORT）' }
   const client = new ImapFlow({
@@ -234,36 +302,68 @@ export async function importBills(cfg) {
   })
   await client.connect()
   const lock = await client.getMailboxLock(cfg.box)
+  const newZips = []
+  const passwords = []
+  let imported = 0
+  let skipped = 0
   try {
     const since = new Date(Date.now() - 45 * 24 * 3600 * 1000)
-    const files = []
     for await (const msg of client.fetch({ since }, { envelope: true, bodyStructure: true }, { uid: true })) {
       // 隐私红线：只读白名单发件人（微信/支付宝/银行账单），其他邮件一律不碰
       const from = (msg.envelope.from || []).map((f) => f.address || '').join(' ')
       if (!new RegExp(cfg.fromFilter, 'i').test(from)) continue
+      // 解压密码邮件：从主题/正文提取密码
+      const pw = extractPassword(msg.envelope.subject || '', msg.text || '')
+      if (pw && !passwords.includes(pw)) passwords.push(pw)
       for (const att of msg.attachments || []) {
         const name = att.filename || ''
-        if (!/\.csv$/i.test(name)) continue
         try {
           const buf = await client.download(att, msg.uid)
-          files.push({ name, buffer: buf })
+          if (/\.zip$/i.test(name)) newZips.push({ name, buffer: buf })
+          else if (/\.csv$/i.test(name)) {
+            const r = await importCsvByName(name, buf)
+            imported += r.imported
+            skipped += r.skipped
+          }
         } catch (e) { /* 单个附件失败不中断 */ }
       }
     }
-    let imported = 0
-    let skipped = 0
-    for (const f of files) {
-      const isAli = /alipay|支付宝/i.test(f.name)
-      const isWx = /wechat|微信/i.test(f.name)
-      const parsed = isAli ? parseAlipayCsv(f.buffer) : isWx ? parseWechatCsv(f.buffer.toString('utf8')) : parseBankCsv(f.buffer)
-      if (parsed.error) continue
-      const r = await importBillRows(parsed.rows)
-      imported += r.imported
-      skipped += r.skipped
-    }
-    return { imported, skipped, error: '', files: files.length }
   } finally {
     lock.release()
     await client.logout()
   }
+  // 新 zip 落盘进入待处理队列（等密码配对）
+  fs.mkdirSync(INBOX_DIR, { recursive: true })
+  const pend = pendingZips()
+  for (const z of newZips) {
+    const file = Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.zip'
+    fs.writeFileSync(path.join(INBOX_DIR, file), z.buffer)
+    pend.push({ name: z.name, file, savedAt: nowIso() })
+  }
+  // 用（本次 + 历史）密码尝试解压全部待处理 zip
+  const allPw = [...new Set([...passwords, ...passwordHistory()])]
+  const still = []
+  for (const p of pend) {
+    let done = false
+    for (const pw of allPw) {
+      const r = await tryUnzipImport(path.join(INBOX_DIR, p.file), pw)
+      if (r.ok) {
+        imported += r.imported
+        skipped += r.skipped
+        fs.rmSync(path.join(INBOX_DIR, p.file), { force: true })
+        done = true
+        break
+      }
+    }
+    if (!done) still.push(p)
+  }
+  // 清理超过 14 天仍无法解压的 zip
+  const fresh = []
+  for (const p of still) {
+    if (Date.now() - Date.parse(p.savedAt || nowIso()) < 14 * 24 * 3600 * 1000) fresh.push(p)
+    else fs.rmSync(path.join(INBOX_DIR, p.file), { force: true })
+  }
+  savePendingZips(fresh)
+  savePasswordHistory(allPw.slice(-10))
+  return { imported, skipped, error: '', files: newZips.length }
 }
