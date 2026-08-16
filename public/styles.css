@@ -392,6 +392,7 @@ body {
     height: calc(100vh - 60px);     /* 整个仪表盘一屏放下 */
     display: grid;
     grid-template-columns: 1fr 1fr; /* 左右两栏等宽：左流水 右统计 */
+    grid-template-rows: 1fr;        /* 单行撑满高度：两栏等高，超出栏内滚动 */
     gap: 16px;
     padding: 16px 20px 20px;
   }
