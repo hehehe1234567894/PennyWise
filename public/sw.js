@@ -1,5 +1,5 @@
 /* PennyWise Service Worker：分享接收 + 网络优先缓存（每次打开都是最新界面，断网才用缓存） */
-const CACHE = 'pennywise-v24'
+const CACHE = 'pennywise-v25'
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg']
 
 function uidGen() {

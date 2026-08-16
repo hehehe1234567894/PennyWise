@@ -1199,14 +1199,14 @@
   async function ensureUnlocked() {
     if (!token) return showLock()
     const r = await fetch('/api/health', { headers: { 'X-Auth-Token': token } }).catch(() => null)
-    if (r && r.ok) return bootApp()
+    if (r && r.ok) { hideLock(); return bootApp() }
     if (r && r.status === 401) {
       token = ''
       localStorage.removeItem(TOKEN_KEY)
       return showLock()
     }
     // 网络完全不可用：持有此前验证过的令牌才进入离线模式
-    if (!r) return bootApp()
+    if (!r) { hideLock(); return bootApp() }
     return showLock()
   }
 
@@ -1250,8 +1250,13 @@
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
         // 每分钟检查一次新版本：发布更新后无需手动刷新，自动生效
         setInterval(() => { reg.update().catch(() => {}) }, 60 * 1000)
-        // 新版本接管后自动刷新一次（事件只在接管时触发一次，不会循环）
-        navigator.serviceWorker.addEventListener('controllerchange', () => location.reload())
+        // 新版本接管后自动刷新一次；锁定屏/弹窗打开时不刷，绝不打断验证流程
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!$('lock-screen').classList.contains('hidden')) return
+          if (!$('modal').classList.contains('hidden')) return
+          if (!$('chat-modal').classList.contains('hidden')) return
+          location.reload()
+        })
       }).catch(() => {})
     }
   }
