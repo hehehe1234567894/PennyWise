@@ -129,7 +129,10 @@
         const err = new Error('network'); err.code = 'network'; throw err
       }
       if (res.status === 401) {
-        if (!$('set-save')) showSettings()
+        // 令牌失效：清除并重新锁定，无验证不可进入
+        token = ''
+        localStorage.removeItem(TOKEN_KEY)
+        showLock()
         const err = new Error('token'); err.code = 'token'; throw err
       }
       const j = await res.json().catch(() => ({ ok: false, error: '响应解析失败' }))
@@ -1145,32 +1148,25 @@
       $('lock-token').value = ''
       $('lock-status').textContent = ''
       hideLock()
-      bootApp()
+      if (booted) location.reload() // 运行中令牌失效后重新验证：整体重载恢复干净状态
+      else bootApp()
     } catch (e) {
       $('lock-status').textContent = '✗ 令牌无效，请检查后重试'
     }
   })
 
-  // 启动前验证：有效令牌 → 进入；本机直连（电脑端）→ 免令牌进入；否则锁定
+  // 启动前验证：必须通过令牌校验才能进入（电脑本机与手机一视同仁，无验证不进网页）
   async function ensureUnlocked() {
-    if (token) {
-      const r = await fetch('/api/health', { headers: { 'X-Auth-Token': token } }).catch(() => null)
-      if (r && r.ok) return bootApp()
-      if (r && r.status === 401) {
-        // 存储的令牌失效：试试本机免令牌（电脑端换了令牌的情况）
-        const r2 = await fetch('/api/health').catch(() => null)
-        if (r2 && r2.ok) return bootApp()
-        token = ''
-        localStorage.removeItem(TOKEN_KEY)
-        return showLock()
-      }
-      // 网络完全不可用：有令牌先进入离线模式（采集走离线队列）
-      if (!r) return bootApp()
+    if (!token) return showLock()
+    const r = await fetch('/api/health', { headers: { 'X-Auth-Token': token } }).catch(() => null)
+    if (r && r.ok) return bootApp()
+    if (r && r.status === 401) {
+      token = ''
+      localStorage.removeItem(TOKEN_KEY)
       return showLock()
     }
-    // 无存储令牌：本机直连免令牌，否则锁定
-    const r = await fetch('/api/health').catch(() => null)
-    if (r && r.ok) return bootApp()
+    // 网络完全不可用：持有此前验证过的令牌才进入离线模式
+    if (!r) return bootApp()
     return showLock()
   }
 

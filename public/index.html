@@ -84,13 +84,13 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <div id="lock-screen" class="lock hidden">
+  <div id="lock-screen" class="lock">
     <div class="lock-card">
       <div class="lock-logo">🔒</div>
       <h2>PennyWise 已锁定</h2>
-      <p class="hint">输入访问令牌解锁。令牌在你的电脑 <code>.env</code> 文件里；或直接在电脑设置页用手机相机扫二维码登录。</p>
+      <p class="hint">没有通过验证就无法进入。访问令牌在你电脑的 <code>.env</code> 文件里（<code>AUTH_TOKEN=</code> 后面的内容），粘贴到下面验证一次，之后本机会自动记住。</p>
       <input id="lock-token" type="password" placeholder="访问令牌" autocomplete="off">
-      <button id="lock-btn" class="btn btn-primary">解锁</button>
+      <button id="lock-btn" class="btn btn-primary">验证并进入</button>
       <p id="lock-status" class="hint"></p>
     </div>
   </div>

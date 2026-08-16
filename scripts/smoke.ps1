@@ -39,10 +39,12 @@ try {
   if ($leftovers.Count -gt 0) { Write-Host "INFO  pre-cleaned $($leftovers.Count) leftover test rows" -ForegroundColor Yellow }
 } catch { }
 
-# 1. public endpoints
-$h = Call GET '/api/health' -withToken $false
+# 1. endpoints: 除 /qr 外全部需要令牌（本机/远程一视同仁）
+Check 'health requires token (401)' ((StatusOf GET '/api/health') -eq 401)
+$h = Call GET '/api/health'
 Check 'health endpoint' ($h.ok -eq $true)
-Check 'config says token required' ((Call GET '/api/config' -withToken $false).tokenRequired -eq $true)
+Check 'config requires token (401)' ((StatusOf GET '/api/config') -eq 401)
+Check 'config says token required' ((Call GET '/api/config').tokenRequired -eq $true)
 
 # 1b. reachability（需令牌） & 跨站防护
 $rc = Call GET '/api/reachability'
@@ -59,11 +61,12 @@ Check 'evil preflight rejected (403)' ($preEvil -eq '403')
 $preOk = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H "Origin: $base" -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
 Check 'same-origin preflight 204' ($preOk -eq '204')
 
-# 1c. QR pairing: localhost is trusted without token, remote still requires it
+# 1c. QR pairing: /qr 是唯一公开端点（纯文本转 SVG）；connect-info 无论本机远程都需令牌
 $qr = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/qr?text=test&size=100"
 Check 'qr endpoint returns svg' ($qr.StatusCode -eq 200 -and $qr.Content -match '<svg')
-$ci = Call GET '/api/connect-info' -withToken $false
-Check 'connect-info available on localhost without token' ($ci.ok -and $ci.data.token -eq $token)
+Check 'connect-info rejected locally without token (401)' ((StatusOf GET '/api/connect-info') -eq 401)
+$ci = Call GET '/api/connect-info'
+Check 'connect-info available with token' ($ci.ok -and $ci.data.token -eq $token)
 
 # 1d. security headers
 $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Content-Type-Options|X-Frame-Options'
@@ -73,8 +76,9 @@ Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.m
 # 1e. automation extras (SMS auto-capture junk-skip, iOS shortcut download)
 $smsj = (curl.exe -s -X POST -H "X-Auth-Token: $token" -H 'Content-Type: text/plain' --data-binary 'hello 123 test verification code 456789' "$base/api/sms") | ConvertFrom-Json
 Check 'sms junk silently skipped' ($smsj.ok -and $smsj.data.skipped -eq $true)
-$scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut"
-Check 'shortcut file downloadable' ($scCode -eq '200')
+$scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut?t=$token"
+Check 'shortcut file downloadable with token' ($scCode -eq '200')
+Check 'shortcut rejected locally without token (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut") -eq '401')
 $rp = Call GET '/api/report/preview'
 Check 'report preview builds' ($rp.ok -and $null -ne $rp.data.text -and $rp.data.text.Length -gt 20)
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
@@ -82,7 +86,7 @@ Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }
 Check 'settings auto_confirm roundtrip' ($ac.ok -and $ac.data.autoConfirm -eq 0.9)
 
-# 2. auth (from a non-local address: this machine's LAN IP)
+# 2. auth from another address (this machine's LAN IP): no token always rejected
 $extBase = "http://$($rc.lan[0].ip):8720"
 Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $extBase) -eq 401)
 Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 } $extBase) -eq 401)

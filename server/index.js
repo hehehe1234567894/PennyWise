@@ -97,9 +97,8 @@ app.use('/api', (req, res, next) => {
   next()
 })
 
-// ---- 鉴权：/api 下公开端点除外，本机直连（localhost）免令牌，其余要求 X-Auth-Token ----
-const isLoop = (ip) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
-const PUBLIC_API = ['/config', '/health', '/qr']
+// ---- 鉴权：/api 下公开端点除外，其余一律要求 X-Auth-Token（本机/远程一视同仁，无验证不可进入） ----
+const PUBLIC_API = ['/qr']
 function tokenOk(a, b) {
   const ba = Buffer.from(String(a))
   const bb = Buffer.from(String(b))
@@ -109,11 +108,8 @@ function tokenOk(a, b) {
 app.use('/api', (req, res, next) => {
   if (!AUTH_TOKEN) return next()
   if (PUBLIC_API.includes(req.path)) return next()
-  // 本机直连（在本机浏览器打开）免令牌：设置/二维码流程零输入
-  const xff = (req.get('x-forwarded-for') || '').split(',')[0].trim()
-  if (isLoop(req.ip) && (!xff || isLoop(xff))) return next()
   if (req.get('x-auth-token') && tokenOk(req.get('x-auth-token'), AUTH_TOKEN)) return next()
-  return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请在设置中填写 AUTH_TOKEN' })
+  return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请验证后再进入' })
 })
 
 const fail = (res, status, code, error) => res.status(status).json({ ok: false, code, error })
@@ -148,7 +144,7 @@ function scanInterfaces() {
   return { lan, tailscale }
 }
 
-// 可达性自报：手机端"连接检测"据此探测哪个地址可用（公开，无需 token）
+// 可达性自报：手机端"连接检测"据此探测哪个地址可用（需令牌）
 app.get('/api/reachability', (req, res) => {
   const { lan, tailscale } = scanInterfaces()
   res.json({
@@ -162,7 +158,7 @@ app.get('/api/reachability', (req, res) => {
   })
 })
 
-// 手机配对信息（含令牌）：仅供本机页面调用，用于生成"扫码即连"二维码
+// 手机配对信息（含令牌）：需令牌，用于生成"扫码即连"二维码
 app.get('/api/connect-info', (req, res) => {
   const { lan, tailscale } = scanInterfaces()
   res.json({
@@ -390,11 +386,9 @@ async function checkMonthlyReport() {
   db.prepare("INSERT INTO meta (k, v) VALUES ('last_report_month', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(key)
 }
 
-// ---- iOS 快捷指令下载（银行短信自动记账；文件含令牌 → 仅本机或携带令牌可下载） ----
+// ---- iOS 快捷指令下载（银行短信自动记账；文件含令牌 → 必须携带令牌 ?t= 才能下载） ----
 app.get('/shortcut', (req, res) => {
-  const xff = (req.get('x-forwarded-for') || '').split(',')[0].trim()
-  const isLocal = isLoop(req.ip) && (!xff || isLoop(xff))
-  if (!isLocal && req.query.t !== AUTH_TOKEN) {
+  if (req.query.t !== AUTH_TOKEN) {
     return res.status(401).send('需要访问令牌（?t=）')
   }
   const { lan, tailscale } = scanInterfaces()
