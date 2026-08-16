@@ -748,6 +748,10 @@
     const topInc = (s.topIncomes || []).map((t, i) => `
       <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.note ? ' · ' + esc(t.note) : ''}</span><b class="income">+${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
     $('stats-extra').innerHTML = `
+      <div class="stat-block" id="rec-block">
+        <div class="stat-block-title">💡 平替与优质推荐（本月账单）</div>
+        <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
+      </div>
       <div class="stat-block">
         <div class="stat-block-title">📅 每日支出（本月）· 日均 ${fmtMoney(s.dailyAvg)}</div>
         <div class="day-chart">${dayBars}</div>
@@ -774,10 +778,6 @@
           <div class="top-sub" style="margin-top:8px">💚 最大收入</div>
           ${topInc}
         </div>
-      </div>
-      <div class="stat-block" id="rec-block">
-        <div class="stat-block-title">💡 平替与优质推荐（本月账单）</div>
-        <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
       </div>`
     requestAnimationFrame(runCountUps)
   }
