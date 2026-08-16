@@ -316,6 +316,71 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4a6b; }
 
+/* ================= 动画系统 ================= */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes popIn { from { opacity: 0; transform: scale(.94) translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes donutIn { from { opacity: 0; transform: rotate(-50deg) scale(.82); } to { opacity: 1; transform: none; } }
+@keyframes growH { from { height: 0; } to { height: var(--h, 0%); } }
+@keyframes growW { from { width: 0; } to { width: var(--w, 0%); } }
+@keyframes shine { 0%, 55% { left: -70%; } 100% { left: 140%; } }
+@keyframes bounceIco { 0% { transform: scale(1); } 35% { transform: scale(1.35) translateY(-2px); } 100% { transform: scale(1); } }
+@keyframes pulseDot { 0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,.55); } 50% { box-shadow: 0 0 0 5px rgba(245,158,11,0); } }
+@keyframes bgShift { 0%, 100% { background-position: 0% 0%; } 50% { background-position: 100% 100%; } }
+@keyframes slideUpToast { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+body {
+  background-size: 160% 160%;
+  animation: bgShift 26s ease-in-out infinite;
+}
+
+/* 卡片错峰入场 */
+.card { animation: fadeUp .32s cubic-bezier(.22,1,.36,1) both; }
+.card:nth-child(2) { animation-delay: 30ms; }
+.card:nth-child(3) { animation-delay: 60ms; }
+.card:nth-child(4) { animation-delay: 90ms; }
+.card:nth-child(5) { animation-delay: 120ms; }
+.card:nth-child(6) { animation-delay: 150ms; }
+.card:nth-child(7) { animation-delay: 180ms; }
+.card:nth-child(8) { animation-delay: 210ms; }
+.card:nth-child(9) { animation-delay: 240ms; }
+.card:nth-child(10) { animation-delay: 270ms; }
+
+/* Logo 流光 */
+.logo-mark { position: relative; overflow: hidden; }
+.logo-mark::after {
+  content: ''; position: absolute; top: 0; left: -70%;
+  width: 42%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.4), transparent);
+  transform: skewX(-20deg);
+  animation: shine 3.4s ease-in-out infinite;
+}
+
+/* 环形图旋转入场 */
+.donut { animation: donutIn .8s cubic-bezier(.22,1,.36,1) both; }
+
+/* 柱状图生长（--h 由 JS 内联提供） */
+.day-bar { height: var(--h, 0%); animation: growH .55s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--i, 0) * 11ms); }
+.acct-bar > div { animation: growW .7s cubic-bezier(.22,1,.36,1) both; }
+.cat-bar { width: var(--w, 0%) !important; animation: growW .6s cubic-bezier(.22,1,.36,1) both; }
+
+/* 标签图标弹跳 */
+.tab.active .tab-ico { animation: bounceIco .38s ease; }
+
+/* 待处理呼吸点 */
+.dot-pending { animation: pulseDot 1.7s ease-in-out infinite; }
+
+/* 弹窗 */
+.modal-card { animation: popIn .3s cubic-bezier(.22,1,.36,1) both; }
+.toast { animation: slideUpToast .26s cubic-bezier(.22,1,.36,1) both; }
+
+/* 标签页切换入场 */
+.tab-enter { animation: fadeUp .26s cubic-bezier(.22,1,.36,1) both; }
+
+/* 尊重系统"减弱动态效果" */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
 /* ================= 电脑版（桌面仪表盘布局） ================= */
 @media (min-width: 960px) {
   .tabs {

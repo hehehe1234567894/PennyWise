@@ -189,7 +189,14 @@
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     if (!isDesktop) {
-      ;['capture', 'pending', 'list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = t !== name })
+      ;['capture', 'pending', 'list', 'stats'].forEach((t) => {
+        const el = $(`tab-${t}`)
+        el.hidden = t !== name
+        el.classList.remove('tab-enter')
+      })
+      const target = $(`tab-${name}`)
+      void target.offsetWidth // 强制重排以重放入场动画
+      target.classList.add('tab-enter')
     }
     if (TAB_RENDER[name]) TAB_RENDER[name]()
   }
@@ -220,6 +227,23 @@
     const p = (n) => String(n).padStart(2, '0')
     const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${wd}`
+  }
+  // 数字滚动动画
+  function countUp(el, { v, sign, dec, ms = 800 }) {
+    const start = performance.now()
+    function step(now) {
+      const p = Math.min(1, (now - start) / ms)
+      const e = 1 - Math.pow(1 - p, 3)
+      const val = v * e
+      el.textContent = dec === 0 ? String(Math.round(val)) : sign + '¥' + val.toFixed(dec)
+      if (p < 1) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  }
+  function runCountUps() {
+    document.querySelectorAll('[data-cnt]').forEach((el) => {
+      countUp(el, { v: Number(el.dataset.cnt), sign: el.dataset.sign || '', dec: Number(el.dataset.dec || 2) })
+    })
   }
 
   // ---------- 编辑器（确认 / 手动 / 编辑 三种模式） ----------
@@ -615,10 +639,11 @@
     const all = await mAll('tx').catch(() => [])
     const s = localSummary(all, month)
     $('stats-cards').innerHTML = `
-      <div class="stat-card"><div class="stat-num income">+${fmtMoney(s.income)}</div><div class="stat-label">收入</div></div>
-      <div class="stat-card"><div class="stat-num expense">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
-      <div class="stat-card"><div class="stat-num">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
-      <div class="stat-card"><div class="stat-num ${s.pendingCount ? 'chip-warn' : ''}">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
+      <div class="stat-card"><div class="stat-num income" data-cnt="${s.income}" data-sign="+" data-dec="2">+${fmtMoney(s.income)}</div><div class="stat-label">收入</div></div>
+      <div class="stat-card"><div class="stat-num expense" data-cnt="${s.expense}" data-sign="-" data-dec="2">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
+      <div class="stat-card"><div class="stat-num" data-cnt="${Math.abs(s.balance)}" data-sign="${s.balance < 0 ? '-' : '+'}" data-dec="2">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
+      <div class="stat-card"><div class="stat-num" data-cnt="${s.pendingCount}" data-sign="" data-dec="0">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
+    requestAnimationFrame(runCountUps)
     const cats = s.byCategory || []
     if (cats.length) {
       const totalCat = cats.reduce((a, c) => a + c.total, 0) || 1
@@ -631,7 +656,7 @@
       $('stats-cats').innerHTML = `
         <div class="donut-wrap">
           <div class="donut" style="background:conic-gradient(${stops.join(',')})">
-            <div class="donut-center"><b>${fmtMoney(s.expense)}</b><span>总支出</span></div>
+            <div class="donut-center"><b data-cnt="${s.expense}" data-sign="-" data-dec="2">${fmtMoney(s.expense)}</b><span>总支出</span></div>
           </div>
           <div class="donut-legend">
             ${cats.slice(0, 9).map((c) => `
@@ -646,6 +671,7 @@
     } else {
       $('stats-cats').innerHTML = '<p class="empty">这个月还没有支出</p>'
     }
+    requestAnimationFrame(runCountUps)
     renderStatsExtra(s)
     renderBudget(month)
   }
@@ -658,16 +684,16 @@
     const dayBars = s.days.map((v, i) => {
       const h = v > 0 ? Math.max(5, Math.round((v / maxDay) * 100)) : 0
       const isToday = i === todayIdx
-      return `<div class="day-col">
+      return `<div class="day-col" style="--i:${i}">
         <div class="day-val">${v > 0 ? Math.round(v) : ''}</div>
-        <div class="day-bar${isToday ? ' today' : ''}" style="height:${h}%"></div>
+        <div class="day-bar${isToday ? ' today' : ''}" style="--h:${h}%"></div>
         <div class="day-lbl">${(i + 1) % 5 === 1 || i + 1 === s.daysInMonth ? i + 1 : ''}</div>
       </div>`
     }).join('')
     // 账户分布
     const acctColors = { wechat: '#22c55e', alipay: '#4f8cff', bank: '#f59e0b', cash: '#84cc16', other: '#64748b' }
     const acctTotal = s.byAccount.reduce((a, b) => a + b.v, 0) || 1
-    const acctBar = `<div class="acct-bar">${s.byAccount.map((e) => `<div style="width:${(e.v / acctTotal) * 100}%;background:${acctColors[e.k] || '#4f8cff'}"></div>`).join('')}</div>`
+    const acctBar = `<div class="acct-bar">${s.byAccount.map((e) => `<div style="--w:${(e.v / acctTotal) * 100}%;background:${acctColors[e.k] || '#4f8cff'}"></div>`).join('')}</div>`
     const acctRows = s.byAccount.map((e) => `
       <div class="acct-row">
         <span class="dot" style="background:${acctColors[e.k] || '#4f8cff'}"></span>
@@ -693,9 +719,9 @@
       $('trend-chart').innerHTML = totals.map((t) => {
         const h = t.total > 0 ? Math.max(5, Math.round((t.total / maxT) * 100)) : 0
         const cur = t.key === s.month
-        return `<div class="day-col">
+        return `<div class="day-col" style="--i:${totals.indexOf(t)}">
           <div class="day-val">${t.total > 0 ? Math.round(t.total) : ''}</div>
-          <div class="day-bar${cur ? ' today' : ''}" style="height:${h}%"></div>
+          <div class="day-bar${cur ? ' today' : ''}" style="--h:${h}%"></div>
           <div class="day-lbl">${t.label}</div>
         </div>`
       }).join('')
@@ -745,7 +771,7 @@
           const over = b.spent > b.limit
           return `<div class="cat-row" data-cat="${esc(b.category)}">
             <div class="cat-name">${esc(b.category)}</div>
-            <div class="cat-bar-wrap"><div class="cat-bar" style="width:${Math.max(3, pct)}%;background:${over ? '#ef4444' : '#22c55e'}"></div></div>
+            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(3, pct)}%;background:${over ? '#ef4444' : '#22c55e'}"></div></div>
             <div class="cat-amt ${over ? 'expense' : ''}">${fmtMoney(b.spent)}/${b.limit}</div>
           </div>`
         }).join('')
