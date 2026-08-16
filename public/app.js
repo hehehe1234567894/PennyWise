@@ -1258,27 +1258,8 @@
     setInterval(syncNow, 30000)
     setInterval(() => { refreshEndpoints().catch(() => {}) }, 60000)
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
-        // 每分钟检查一次新版本：发布更新后无需手动刷新，自动生效
-        setInterval(() => { reg.update().catch(() => {}) }, 60 * 1000)
-        // 新版本接管后自动刷新一次；锁定屏/弹窗打开时不刷，绝不打断验证流程
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!$('lock-screen').classList.contains('hidden')) return
-          if (!$('modal').classList.contains('hidden')) return
-          if (!$('chat-modal').classList.contains('hidden')) return
-          location.reload()
-        })
-        // 服务更新握手：回应服务端清理动作；已解锁且无弹窗才刷新
-        navigator.serviceWorker.addEventListener('message', (e) => {
-          if (e.data && e.data.type === 'pw-update') {
-            if (e.ports && e.ports[0]) e.ports[0].postMessage('ok')
-            if (!$('lock-screen').classList.contains('hidden')) return
-            if (!$('modal').classList.contains('hidden')) return
-            if (!$('chat-modal').classList.contains('hidden')) return
-            location.reload()
-          }
-        })
-      }).catch(() => {})
+      // 仅用于"分享入账"接收；页面不再缓存，也绝不自动刷新（自动刷新曾造成莫名重载）
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {})
     }
   }
 
