@@ -1,5 +1,5 @@
 /* PennyWise Service Worker：应用壳缓存 + 分享接收（截图/文本直达账本，无需快捷指令） */
-const CACHE = 'pennywise-v16'
+const CACHE = 'pennywise-v17'
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg']
 
 function uidGen() {

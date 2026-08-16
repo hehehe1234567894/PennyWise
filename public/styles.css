@@ -385,12 +385,8 @@ body {
 
 /* ================= 电脑版（田字形仪表盘布局；仅真电脑生效，手机竖排不受影响） ================= */
 @media (min-width: 960px) and (pointer: fine) {
-  .tabs {
-    position: static; justify-content: flex-start; gap: 2px;
-    border-top: none; border-bottom: 1px solid var(--border);
-    padding: 0 18px; background: transparent; backdrop-filter: none;
-  }
-  .tab { flex: none; flex-direction: row; gap: 6px; padding: 13px 18px; font-size: 13px; }
+  /* 内容全部铺开，不再需要切换栏 */
+  .tabs { display: none; }
   main {
     max-width: 1360px;
     display: grid;
