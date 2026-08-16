@@ -197,6 +197,9 @@
       const target = $(`tab-${name}`)
       void target.offsetWidth // 强制重排以重放入场动画
       target.classList.add('tab-enter')
+    } else {
+      const target = $(`tab-${name}`)
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
     if (TAB_RENDER[name]) TAB_RENDER[name]()
   }

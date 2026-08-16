@@ -383,7 +383,7 @@ body {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ================= 电脑版（桌面仪表盘布局） ================= */
+/* ================= 电脑版（田字形仪表盘布局） ================= */
 @media (min-width: 960px) {
   .tabs {
     position: static; justify-content: flex-start; gap: 2px;
@@ -392,29 +392,47 @@ body {
   }
   .tab { flex: none; flex-direction: row; gap: 6px; padding: 13px 18px; font-size: 13px; }
   main {
-    max-width: 1280px;
+    max-width: 1360px;
     display: grid;
-    grid-template-columns: 400px 1fr;
+    grid-template-columns: 1fr 1fr; /* 田字形：等宽两列 */
+    grid-template-rows: auto auto;  /* 等分两行 */
     gap: 16px;
     padding: 20px 24px 48px;
-    align-items: start;
+    align-items: stretch;
   }
-  /* 左列：记账 + 待处理；右列：流水；统计独占整行 */
+  /* 四宫格：左上=记一笔 右上=待处理 左下=流水 右下=统计 */
   #tab-capture { grid-column: 1; grid-row: 1; }
-  #tab-pending { grid-column: 1; grid-row: 2; }
-  #tab-list { grid-column: 2; grid-row: 1 / span 2; }
-  #tab-stats { grid-column: 1 / -1; grid-row: 3; }
-  #pending-list { max-height: 340px; overflow-y: auto; padding-right: 4px; }
+  #tab-pending { grid-column: 2; grid-row: 1; }
+  #tab-list    { grid-column: 1; grid-row: 2; }
+  #tab-stats   { grid-column: 2; grid-row: 2; }
+
   .desktop main section {
+    display: flex; flex-direction: column;
     background: linear-gradient(180deg, rgba(255,255,255,.015), transparent 40%), var(--card);
     border: 1px solid var(--border); border-radius: 16px; padding: 18px;
   }
   .desktop section h2, .desktop section h3 { margin-top: 0; }
-  .stats-cards { grid-template-columns: repeat(4, 1fr); }
-  .stat-row { grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-  .stat-block { margin-bottom: 0; }
-  #list-items { max-height: calc(100vh - 230px); overflow-y: auto; padding-right: 5px; }
+  /* 记一笔撑满左上格 */
+  .desktop #tab-capture textarea { flex: 1; }
+  /* 待处理：限定高度内部滚动，与左上格对齐 */
+  #pending-list { max-height: 320px; overflow-y: auto; padding-right: 4px; }
+  /* 流水：撑满左下格，列表内部滚动 */
+  .desktop #tab-list { display: flex; flex-direction: column; }
+  .desktop #list-items { flex: 1; overflow-y: auto; padding-right: 5px; min-height: 300px; }
   .row-card { cursor: pointer; }
+
+  /* 统计内部排成规整子网格：指标卡 2×2，面板自动分栏、首块通栏 */
+  .stats-cards { grid-template-columns: repeat(2, 1fr); }
+  #stats-extra {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  #stats-extra .stat-block { margin-bottom: 0; }
+  #stats-extra .stat-block:first-child { grid-column: 1 / -1; }
+  .stat-row { display: contents; }
+  .donut-wrap { flex-direction: column; }
+  .donut-legend { width: 100%; }
 }
 
 /* 窄屏兜底 */
