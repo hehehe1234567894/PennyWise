@@ -204,7 +204,7 @@ app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (r
 })
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----
-const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, merged: 0, reviewedPairs: 0, passwords: 0, error: '' }
+const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, merged: 0, reviewedPairs: 0, categorized: 0, passwords: 0, error: '' }
 async function runBillImport() {
   billStatus.enabled = mailConfig().billsEnabled
   try {
@@ -214,6 +214,7 @@ async function runBillImport() {
     billStatus.skipped = r.skipped
     billStatus.merged = r.merged || 0
     billStatus.reviewedPairs = r.reviewedPairs || 0
+    billStatus.categorized = r.categorized || 0
     billStatus.passwords = r.passwords || 0
     billStatus.error = r.error || ''
     // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）

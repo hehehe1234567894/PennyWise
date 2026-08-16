@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { env, DATA_DIR } from './env.js'
-import { db, ruleFor, nowIso, validTs, newUid, nextRev } from './db.js'
+import { db, ruleFor, upsertRule, nowIso, validTs, newUid, nextRev } from './db.js'
 import { llmConfig } from './llm.js'
 import { ImapFlow } from 'imapflow'
 import AdmZip from 'adm-zip'
@@ -393,7 +393,37 @@ export async function llmMergeDecide(items) {
   }
 }
 
-// 对账主流程：ext_id 去重 → 候选对 → LLM 一次性审核合并 → 应用
+// LLM 批量分类：商户去重后一次调用（商品名辅助判断），返回商户 → 分类映射
+export async function llmCategorizeMerchants(items) {
+  const cfg = llmConfig()
+  if (!cfg.enabled) return { ok: false, error: 'no_llm' }
+  const sys = `你是记账分类助手。为每个商户/商品组合选择最合适的消费分类，只能从以下枚举中选一个：餐饮,交通,购物,娱乐,学习,日用品,医疗,通讯,住宿,运动,生活缴费,人情,其他。
+判断要点：商品名（g 字段）是分类的关键依据，商户名被脱敏（含**）时以商品名为准；同一商户可能对应多种消费（如淘宝购物/买菜），按商品名判断；无法判断时填"其他"。
+只输出一个 JSON 对象：{"categories":[{"m":"商户名","category":"餐饮"},...]}，与输入数组顺序一一对应。`
+  try {
+    const res = await fetch(`${cfg.base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
+        temperature: 0,
+        response_format: { type: 'json_object' },
+      }),
+      signal: AbortSignal.timeout(60000),
+    })
+    if (!res.ok) return { ok: false, error: 'http' + res.status }
+    const j = await res.json()
+    const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    const parsed = JSON.parse(content)
+    if (!Array.isArray(parsed.categories)) return { ok: false, error: 'bad_categories' }
+    return { ok: true, categories: parsed.categories }
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e).slice(0, 100) }
+  }
+}
+
+// 对账主流程：ext_id 去重 → 候选对 → LLM 一次性审核合并 → LLM 批量分类 → 应用
 export async function reconcileAndImport(rows) {
   // 1) 已导入过（ext_id 命中）的直接跳过
   const fresh = []
@@ -438,6 +468,27 @@ export async function reconcileAndImport(rows) {
       }
     }
   }
+  // 3.5) LLM 批量分类：无规则记忆的支出商户去重后一次调用（商品名辅助判断），结果写入规则记忆
+  const catMap = new Map()
+  if (env('BILL_LLM_CATEGORIZE', '1') === '1') {
+    const need = []
+    const seen = new Set()
+    for (const r of fresh) {
+      if (r.direction !== 'expense' || !r.merchant) continue
+      if (ruleFor(r.merchant)) continue // 有规则记忆的 0 token
+      if (seen.has(r.merchant)) continue
+      seen.add(r.merchant)
+      need.push({ m: r.merchant, g: r.goods_name ? [r.goods_name] : [] })
+    }
+    if (need.length) {
+      const res = await llmCategorizeMerchants(need)
+      if (res.ok) {
+        for (const c of res.categories) {
+          if (c && c.m && c.category && c.category !== '其他') catMap.set(c.m, c.category)
+        }
+      }
+    }
+  }
   // 4) 应用：匹配 → 既有记录挂账单单号（合并）；未匹配 → 插入新行
   let imported = 0
   let merged = 0
@@ -453,8 +504,8 @@ export async function reconcileAndImport(rows) {
     const ts = validTs(r.ts) || nowIso()
     let category = null
     if (r.direction === 'expense') {
-      const rule = ruleFor(r.merchant)
-      category = rule ? rule.category : '其他'
+      category = catMap.get(r.merchant) || ruleFor(r.merchant)?.category || '其他'
+      if (catMap.get(r.merchant)) upsertRule(r.merchant, catMap.get(r.merchant)) // 学到规则记忆
     }
     const rev = nextRev()
     const now = nowIso()
@@ -464,7 +515,7 @@ export async function reconcileAndImport(rows) {
     `).run(newUid(), r.ext_id || null, ts, now, r.amount, r.direction, r.merchant, r.goods_name, category, r.account, r.raw_text, r.note, rev, now)
     imported++
   }
-  return { imported, skipped, merged, reviewedPairs: pairs.length }
+  return { imported, skipped, merged, reviewedPairs: pairs.length, categorized: catMap.size }
 }
 
 // 行数据 → 确定性解析（按平台提示）→ 失败 LLM 兜底 → 返回行数组（不入库）
@@ -812,6 +863,7 @@ export async function importBills(cfg) {
   const rec = await reconcileAndImport(allRows)
   return {
     imported: rec.imported, skipped: rec.skipped, merged: rec.merged,
-    reviewedPairs: rec.reviewedPairs, error: '', files: newZips.length, passwords: passwords.length,
+    reviewedPairs: rec.reviewedPairs, categorized: rec.categorized,
+    error: '', files: newZips.length, passwords: passwords.length,
   }
 }
