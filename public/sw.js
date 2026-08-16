@@ -1,7 +1,7 @@
-/* PennyWise Service Worker：分享接收 + 网络优先缓存（每次打开都是最新界面，断网才用缓存） */
-const CACHE = 'pennywise-v26'
-const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg']
-
+/* PennyWise Service Worker v28（极简版）
+   - 不再缓存任何文件：页面请求全部直连服务器，永远是最新界面（历史缓存曾导致旧版界面卡死）
+   - 安装/激活时清空全部历史缓存，并把已打开的旧页面自动刷新一次
+   - 只保留分享接收（POST /share → 本地镜像 → 回到应用） */
 function uidGen() {
   return (crypto.randomUUID && crypto.randomUUID()) || 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
 }
@@ -69,40 +69,37 @@ async function handleShare(req) {
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE)
-      .then((c) => Promise.allSettled(SHELL.map((u) => c.add(u))))
+    caches.keys()
+      .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
       .then(() => self.skipWaiting())
   )
 })
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-  )
+  e.waitUntil((async () => {
+    // 清空全部历史缓存
+    const keys = await caches.keys()
+    await Promise.all(keys.map((k) => caches.delete(k)))
+    await self.clients.claim()
+    // 救援旧页面：新版页面自己决定是否刷新；没响应的（旧代码已崩溃）1.2 秒后强制刷新
+    const cs = await self.clients.matchAll({ type: 'window' })
+    for (const c of cs) {
+      try {
+        let responded = false
+        const channel = new MessageChannel()
+        const timer = setTimeout(() => { if (!responded) c.navigate(c.url).catch(() => {}) }, 1200)
+        channel.port1.onmessage = () => { responded = true; clearTimeout(timer) }
+        c.postMessage({ type: 'pw-update' }, [channel.port2])
+      } catch { /* 页面不可达则忽略 */ }
+    }
+  })())
 })
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url)
-  // 分享入口：截图/文本 → 本地账本 → 回到应用
+  // 只接管分享入口，其余请求一律不拦截 → 直连服务器，永远最新
   if (e.request.method === 'POST' && url.pathname === '/share') {
     e.respondWith(handleShare(e.request))
     return
   }
-  if (e.request.method !== 'GET') return
-  if (url.pathname.startsWith('/api/')) return // 网络直通，不缓存
-  // 网络优先：保证每次打开都是最新界面；网络失败才退回缓存（离线兜底）
-  e.respondWith(
-    fetch(e.request).then((res) => {
-      if (res.ok && url.origin === location.origin) {
-        const clone = res.clone()
-        caches.open(CACHE).then((c) => c.put(e.request, clone))
-      }
-      return res
-    }).catch(() => caches.match(e.request).then((hit) => {
-      if (hit) return hit
-      return e.request.mode === 'navigate' ? caches.match('/index.html') : Response.error()
-    }))
-  )
 })

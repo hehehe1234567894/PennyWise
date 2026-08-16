@@ -1268,6 +1268,16 @@
           if (!$('chat-modal').classList.contains('hidden')) return
           location.reload()
         })
+        // 服务更新握手：回应服务端清理动作；已解锁且无弹窗才刷新
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data && e.data.type === 'pw-update') {
+            if (e.ports && e.ports[0]) e.ports[0].postMessage('ok')
+            if (!$('lock-screen').classList.contains('hidden')) return
+            if (!$('modal').classList.contains('hidden')) return
+            if (!$('chat-modal').classList.contains('hidden')) return
+            location.reload()
+          }
+        })
       }).catch(() => {})
     }
   }
