@@ -12,7 +12,7 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>PennyWise</h1>
+    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1></div>
     <div class="topbar-right">
       <span id="net-chip" class="chip chip-ok hidden">在线</span>
       <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
@@ -70,10 +70,10 @@
   </main>
 
   <nav class="tabs">
-    <button class="tab active" data-tab="capture">记一笔</button>
-    <button class="tab" data-tab="pending">待处理</button>
-    <button class="tab" data-tab="list">流水</button>
-    <button class="tab" data-tab="stats">统计</button>
+    <button class="tab active" data-tab="capture"><span class="tab-ico">✏️</span><span>记一笔</span></button>
+    <button class="tab" data-tab="pending"><span class="tab-ico">⏳</span><span>待处理</span></button>
+    <button class="tab" data-tab="list"><span class="tab-ico">📄</span><span>流水</span></button>
+    <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
   </nav>
 
   <div id="modal" class="modal hidden">

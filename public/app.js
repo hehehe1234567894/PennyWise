@@ -7,7 +7,10 @@
   const fmtMoney = (n) => (n === null || n === undefined) ? '—' : '¥' + Number(n).toFixed(2)
   const DIR_LABEL = { expense: '支出', income: '收入', refund: '退款', transfer: '转账' }
   const ACC_LABEL = { wechat: '微信', alipay: '支付宝', bank: '银行卡', cash: '现金', other: '其他' }
-  const CAT_COLORS = ['#4f8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#14b8a6', '#94a3b8']
+  // 语义化分类配色（环形图/图例/流水芯片统一使用）
+  const CAT_HEX = { '餐饮': '#f59e0b', '交通': '#38bdf8', '购物': '#ec4899', '娱乐': '#a855f7', '学习': '#22c55e', '日用品': '#84cc16', '医疗': '#ef4444', '通讯': '#06b6d4', '住宿': '#8b5cf6', '运动': '#10b981', '生活缴费': '#f97316', '人情': '#eab308', '其他': '#64748b' }
+  const catColor = (n) => CAT_HEX[n] || '#4f8cff'
+  const CAT_COLORS = ['#4f8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#84cc16']
 
   const TOKEN_KEY = 'pw_token'
   let token = localStorage.getItem(TOKEN_KEY) || ''
@@ -211,6 +214,12 @@
     const d = new Date(iso)
     const p = (n) => String(n).padStart(2, '0')
     return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
+  }
+  function fmtDay(iso) {
+    const d = new Date(iso)
+    const p = (n) => String(n).padStart(2, '0')
+    const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${wd}`
   }
 
   // ---------- 编辑器（确认 / 手动 / 编辑 三种模式） ----------
@@ -546,13 +555,19 @@
       .filter((t) => String(t.ts || '').startsWith(month) && (!q || [t.merchant, t.goods_name, t.note, t.raw_text].some((x) => String(x || '').toLowerCase().includes(q))))
       .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
     lastListItems = items
+    let lastDay = ''
     $('list-items').innerHTML = items.map((t) => {
+      const day = fmtDay(t.ts)
+      const dayHead = day !== lastDay ? `<div class="day-head">${esc(day)}</div>` : ''
+      lastDay = day
       const cls = t.direction === 'income' ? 'income' : (t.direction === 'refund' ? 'refund' : 'expense')
       const sign = (t.direction === 'income' || t.direction === 'refund') ? '+' : '-'
-      return `<div class="card row-card" data-id="${esc(t.uid)}">
+      const catChip = (t.direction === 'expense' && t.category)
+        ? `<span class="cat-chip" style="background:${catColor(t.category)}1f;color:${catColor(t.category)}">${esc(t.category)}</span>` : ''
+      return `${dayHead}<div class="card row-card" data-id="${esc(t.uid)}">
         <div class="row-left">
           <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}${t.raw_image || t.local_image ? ' 🖼' : ''}</div>
-          <div class="row-sub">${fmtTs(t.ts)} · ${esc(t.category || DIR_LABEL[t.direction] || '')} · ${esc(ACC_LABEL[t.account] || '')}</div>
+          <div class="row-sub">${fmtTs(t.ts)} · ${esc(ACC_LABEL[t.account] || '')}${catChip}</div>
         </div>
         <div class="row-amt ${cls}">${sign}${fmtMoney(t.amount)}</div>
       </div>`
@@ -582,13 +597,32 @@
       <div class="stat-card"><div class="stat-num">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
       <div class="stat-card"><div class="stat-num ${s.pendingCount ? 'chip-warn' : ''}">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
     const cats = s.byCategory || []
-    const max = cats.length ? Math.max(...cats.map((c) => c.total)) : 0
-    $('stats-cats').innerHTML = cats.length ? cats.map((c, i) => `
-      <div class="cat-row">
-        <div class="cat-name"><span class="dot" style="background:${CAT_COLORS[i % CAT_COLORS.length]}"></span>${esc(c.name)} <span class="cat-n">${c.n}笔</span></div>
-        <div class="cat-bar-wrap"><div class="cat-bar" style="width:${max ? Math.max(3, Math.round((c.total / max) * 100)) : 3}%;background:${CAT_COLORS[i % CAT_COLORS.length]}"></div></div>
-        <div class="cat-amt">${fmtMoney(c.total)}</div>
-      </div>`).join('') : '<p class="empty">这个月还没有支出</p>'
+    if (cats.length) {
+      const totalCat = cats.reduce((a, c) => a + c.total, 0) || 1
+      let acc = 0
+      const stops = cats.map((c) => {
+        const from = acc
+        acc += (c.total / totalCat) * 100
+        return `${catColor(c.name)} ${from}% ${acc}%`
+      })
+      $('stats-cats').innerHTML = `
+        <div class="donut-wrap">
+          <div class="donut" style="background:conic-gradient(${stops.join(',')})">
+            <div class="donut-center"><b>${fmtMoney(s.expense)}</b><span>总支出</span></div>
+          </div>
+          <div class="donut-legend">
+            ${cats.slice(0, 9).map((c) => `
+              <div class="donut-legend-row">
+                <span class="dot" style="background:${catColor(c.name)}"></span>
+                <span class="lg-name">${esc(c.name)}</span>
+                <span class="lg-pct">${Math.round((c.total / totalCat) * 100)}%</span>
+                <span class="lg-amt">${fmtMoney(c.total)}</span>
+              </div>`).join('')}
+          </div>
+        </div>`
+    } else {
+      $('stats-cats').innerHTML = '<p class="empty">这个月还没有支出</p>'
+    }
     renderBudget(month)
   }
 
