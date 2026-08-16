@@ -19,9 +19,47 @@
     </div>
   </header>
 
-  <main>
+  <main id="app-main">
     <div id="model-alert" class="model-alert hidden"></div>
-    <section id="tab-capture" hidden>
+    <div class="dash">
+
+    <!-- 流水 -->
+    <section id="tab-list" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">📄 流水</h2>
+        <div class="panel-tools">
+          <input id="list-month" type="month">
+          <input id="list-q" type="search" placeholder="搜索商户 / 备注">
+        </div>
+      </div>
+      <div id="list-summary" class="sum-row"></div>
+      <div id="list-items" class="panel-scroll"></div>
+      <p id="list-empty" class="empty hidden">这个月还没有记录</p>
+    </section>
+
+    <!-- 统计 -->
+    <section id="tab-stats" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">📊 统计</h2>
+        <input id="stats-month" type="month" class="month-input">
+      </div>
+      <div class="panel-scroll">
+        <div id="stats-cards" class="stats-cards"></div>
+        <div id="stats-extra"></div>
+        <h3>预算（本月）</h3>
+        <div class="btn-row">
+          <select id="bud-cat"></select>
+          <input id="bud-limit" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="限额（元）">
+        </div>
+        <div class="btn-row">
+          <button id="bud-save" class="btn btn-primary">保存预算</button>
+        </div>
+        <div id="budget-list"></div>
+      </div>
+    </section>
+
+    <!-- 以下两个板块已停用（隐藏保留，数据流不受影响） -->
+    <section id="tab-capture" class="panel" hidden>
       <h2>记一笔</h2>
       <p class="hint">粘贴交易通知 / 点「选截图」识别支付截图 / 电脑上可直接 Ctrl+V 粘贴截图</p>
       <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
@@ -36,38 +74,12 @@
       <input id="file-image" type="file" accept="image/*" hidden>
     </section>
 
-    <section id="tab-pending" hidden>
+    <section id="tab-pending" class="panel" hidden>
       <div class="section-head"><h2>待处理</h2><span id="pending-count" class="chip"></span></div>
       <div id="pending-list"></div>
       <p id="pending-empty" class="empty hidden">没有待确认的记录 🎉</p>
     </section>
-
-    <section id="tab-list" hidden>
-      <h2>流水</h2>
-      <div class="filters">
-        <input id="list-month" type="month">
-        <input id="list-q" type="search" placeholder="搜索商户 / 备注">
-      </div>
-      <div id="list-summary" class="sum-row"></div>
-      <div id="list-items"></div>
-      <p id="list-empty" class="empty hidden">这个月还没有记录</p>
-    </section>
-
-    <section id="tab-stats" hidden>
-      <h2>统计</h2>
-      <input id="stats-month" type="month" class="month-input">
-      <div id="stats-cards" class="stats-cards"></div>
-      <div id="stats-extra"></div>
-      <h3>预算（本月）</h3>
-      <div class="btn-row">
-        <select id="bud-cat"></select>
-        <input id="bud-limit" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="限额（元）">
-      </div>
-      <div class="btn-row">
-        <button id="bud-save" class="btn btn-primary">保存预算</button>
-      </div>
-      <div id="budget-list"></div>
-    </section>
+    </div>
   </main>
 
   <nav class="tabs">
