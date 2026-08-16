@@ -43,6 +43,44 @@ export async function recommendAlternatives(query) {
   }
 }
 
+// 判断是否有比"用户现价"更便宜的方案（结论先行，结构化输出）
+export async function findCheaperOption({ product, currentPrice, reason }) {
+  const base = env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '')
+  const key = env('VISION_API_KEY')
+  const model = env('RECOMMEND_MODEL', 'qwen-plus')
+  if (!key) return { cheaper: false, text: '' }
+  const sys = `你是省钱助手。用户目前在用「${product}」，价格为 ${currentPrice} 元。请联网搜索该商品/服务的当前市场价格、官方优惠与替代渠道（学生价、拼车、年付折扣、同类更便宜替代品）。
+只推荐比用户现价 ${currentPrice} 元更低的方案；如果找不到更便宜的，结论为 false 并简述"当前已是较优价格"的理由。
+只输出一个 JSON 对象：{"cheaper":true或false,"text":"给用户的话（Markdown，250字以内，结论先行；cheaper=true 时列方案：名称、价格、比现价省多少、关键取舍；cheaper=false 时说明当前已较优的理由）"}`
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model,
+        enable_search: true,
+        messages: [
+          { role: 'system', content: sys },
+          { role: 'user', content: `商品：${product}\n现价：${currentPrice} 元\n备注：${reason || ''}` },
+        ],
+        temperature: 0.2,
+      }),
+      signal: AbortSignal.timeout(90000),
+    })
+    if (!res.ok) return { cheaper: false, text: '' }
+    const j = await res.json()
+    const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    try {
+      const d = JSON.parse(content)
+      return { cheaper: d.cheaper === true, text: String(d.text || '').slice(0, 800) }
+    } catch {
+      return { cheaper: true, text: content.slice(0, 800) } // JSON 失败时按普通文本处理
+    }
+  } catch {
+    return { cheaper: false, text: '' }
+  }
+}
+
 // ================= 账单驱动的省钱引擎（随月报推送，连续两月不重复推荐） =================
 
 function lastAltRecommend() {
@@ -66,7 +104,7 @@ export async function analyzeBillForAlternatives(month) {
     SELECT merchant, goods_name, COUNT(*) AS n, SUM(amount) AS total
     FROM transactions WHERE ts LIKE ? AND status = 'confirmed' AND amount IS NOT NULL AND direction = 'expense'
     GROUP BY merchant ORDER BY n DESC, total DESC LIMIT 15
-  `).all(month + '%').map((r) => ({ merchant: r.merchant, goods: r.goods_name, n: Number(r.n), total: Number(r.total) }))
+  `).all(month + '%').map((r) => ({ merchant: r.merchant, goods: r.goods_name, n: Number(r.n), total: Number(r.total), avg: Math.round((Number(r.total) / Number(r.n)) * 100) / 100 }))
   const tops = db.prepare(`
     SELECT merchant, goods_name, amount FROM transactions
     WHERE ts LIKE ? AND status = 'confirmed' AND amount IS NOT NULL AND direction = 'expense'
@@ -74,9 +112,8 @@ export async function analyzeBillForAlternatives(month) {
   `).all(month + '%')
   const last = lastAltRecommend()
   const exclude = last && Array.isArray(last.items) && last.items.length ? last.items.join('、') : '无'
-  const sys = `你是省钱助手。分析用户的月度账单，挑选 1-3 个"值得找更便宜替代/更划算渠道"的商品或服务。
-挑选标准（按优先级）：① 订阅/会员类（音乐/视频/网盘/工具会员，常有学生价/拼车/年付优惠）；② 高频重复购买（同商户多次购买，可能批发/换渠道更便宜）；③ 大额一次性消费。
-规则：不要推荐以下商品（上月已推荐过，连续两个月推荐同一商品会让用户厌烦）：${exclude}；商品名不明确的宁可跳过；只输出 JSON：{"items":[{"product":"商品/服务名","reason":"简短理由（含本月花费）","search":"给搜索引擎的关键词"}]}，最多 3 个，没有合适的输出 {"items":[]}。`
+  const sys = `你是省钱助手。分析用户的月度账单，挑选 1-3 个"可能存在更便宜选择"的商品或服务（订阅/会员、高频重复购买、大额消费）。
+规则：不要推荐以下商品（上月已推荐过，连续两个月推荐同一商品会让用户厌烦）：${exclude}；商品名不明确的宁可跳过；current_price 填用户当前的单价（订阅=月费，商品=单价，从 avg 字段取）；只输出 JSON：{"items":[{"product":"商品/服务名","current_price":25.5,"reason":"简短理由","search":"给搜索引擎的关键词"}]}，最多 3 个，没有合适的输出 {"items":[]}。`
   let items = []
   try {
     const res = await fetch(`${cfg.base}/chat/completions`, {
@@ -86,7 +123,7 @@ export async function analyzeBillForAlternatives(month) {
         model: cfg.model,
         messages: [
           { role: 'system', content: sys },
-          { role: 'user', content: `本月数据：\n高频商户：${JSON.stringify(freq)}\n大额支出：${JSON.stringify(tops)}` },
+          { role: 'user', content: `本月数据：\n高频商户（含平均单价 avg）：${JSON.stringify(freq)}\n大额支出：${JSON.stringify(tops)}` },
         ],
         temperature: 0,
         response_format: { type: 'json_object' },
@@ -103,8 +140,16 @@ export async function analyzeBillForAlternatives(month) {
   const out = []
   for (const it of items) {
     if (!it.product || !it.search) continue
-    const r = await recommendAlternatives(`${it.search} 便宜 替代`)
-    out.push({ product: String(it.product).slice(0, 60), reason: String(it.reason || '').slice(0, 120), recommendation: r.text })
+    const price = Number(it.current_price)
+    // 核心判断：是否有比用户现价更便宜的方案，只有 cheaper=true 才推送
+    const r = await findCheaperOption({ product: String(it.product).slice(0, 60), currentPrice: Number.isFinite(price) ? price : 0, reason: String(it.reason || '').slice(0, 120) })
+    if (r.cheaper && r.text) {
+      out.push({
+        product: String(it.product).slice(0, 60),
+        reason: `现价 ¥${Number.isFinite(price) ? price : '?'}${it.reason ? '，' + String(it.reason).slice(0, 100) : ''}`,
+        recommendation: r.text,
+      })
+    }
   }
   if (out.length) saveLastAltRecommend(month, out.map((x) => x.product))
   return out

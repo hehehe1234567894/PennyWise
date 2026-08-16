@@ -124,7 +124,7 @@ export function buildReportText(s, narrative = '', alts = []) {
   }
   if (alts.length) {
     lines.push('')
-    lines.push('🛒 平替推荐（根据你的账单）')
+    lines.push('🛒 更便宜的选择（比你现在用的更低）')
     alts.forEach((a, i) => {
       lines.push(`${i + 1}. ${a.product}${a.reason ? '（' + a.reason + '）' : ''}`)
       lines.push(a.recommendation)
@@ -167,7 +167,7 @@ export function buildReportHtml(s, narrative = '', alts = []) {
     ? `<div style="background:#12231a;border:1px solid #22c55e55;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#22c55e;font-size:12px;font-weight:700;margin-bottom:6px">📝 AI 分析</div><div style="font-size:14px;line-height:1.7">${esc(narrative).replace(/\n/g, '<br>')}</div></div>`
     : ''
   const altSection = alts.length
-    ? `<div style="background:#1a1626;border:1px solid #a855f755;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#c084fc;font-size:12px;font-weight:700;margin-bottom:8px">🛒 平替推荐（根据你的账单）</div>${alts.map((a) => `<div style="margin-bottom:10px;font-size:14px"><b>${esc(a.product)}</b>${a.reason ? ` <span style="color:#8b93a5;font-size:12px">（${esc(a.reason)}）</span>` : ''}<div style="line-height:1.7;margin-top:2px">${esc(a.recommendation).replace(/\n/g, '<br>')}</div></div>`).join('')}</div>`
+    ? `<div style="background:#1a1626;border:1px solid #a855f755;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#c084fc;font-size:12px;font-weight:700;margin-bottom:8px">🛒 更便宜的选择（比你现在用的更低）</div>${alts.map((a) => `<div style="margin-bottom:10px;font-size:14px"><b>${esc(a.product)}</b>${a.reason ? ` <span style="color:#8b93a5;font-size:12px">（${esc(a.reason)}）</span>` : ''}<div style="line-height:1.7;margin-top:2px">${esc(a.recommendation).replace(/\n/g, '<br>')}</div></div>`).join('')}</div>`
     : ''
   return `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#0f1115;color:#e8eaf0;padding:24px">
