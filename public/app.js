@@ -178,21 +178,20 @@
     isDesktop = mqDesktop.matches
     document.body.classList.toggle('desktop', isDesktop)
     if (isDesktop) {
-      ;['capture', 'pending', 'list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = false })
-      renderPending().catch(() => {})
+      ;['list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = false })
       renderList().catch(() => {})
       renderStats().catch(() => {})
     } else {
-      switchTab(document.querySelector('.tab.active')?.dataset.tab || 'capture')
+      switchTab(document.querySelector('.tab.active')?.dataset.tab || 'list')
     }
   }
   mqDesktop.addEventListener('change', applyLayout)
 
-  const TAB_RENDER = { pending: renderPending, list: renderList, stats: renderStats }
+  const TAB_RENDER = { list: renderList, stats: renderStats }
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     if (!isDesktop) {
-      ;['capture', 'pending', 'list', 'stats'].forEach((t) => {
+      ;['list', 'stats'].forEach((t) => {
         const el = $(`tab-${t}`)
         el.hidden = t !== name
         el.classList.remove('tab-enter')

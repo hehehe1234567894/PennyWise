@@ -389,18 +389,14 @@ body {
   .tabs { display: none; }
   main {
     max-width: 1360px;
-    height: calc(100vh - 60px);     /* 整个田字仪表盘一屏放下 */
+    height: calc(100vh - 60px);     /* 整个仪表盘一屏放下 */
     display: grid;
-    grid-template-columns: 1fr 1fr; /* 田字形：四格等宽 */
-    grid-template-rows: 1fr 1fr;    /* 四格等高，严格对齐 */
+    grid-template-columns: 1fr 1fr; /* 左右两栏等宽：左流水 右统计 */
     gap: 16px;
     padding: 16px 20px 20px;
   }
-  /* 四宫格：左上=记一笔 右上=待处理 左下=流水 右下=统计 */
-  #tab-capture { grid-column: 1; grid-row: 1; }
-  #tab-pending { grid-column: 2; grid-row: 1; }
-  #tab-list    { grid-column: 1; grid-row: 2; }
-  #tab-stats   { grid-column: 2; grid-row: 2; }
+  #tab-list  { grid-column: 1; grid-row: 1; }
+  #tab-stats { grid-column: 2; grid-row: 1; }
 
   .desktop main section {
     display: flex; flex-direction: column; min-height: 0;
@@ -409,15 +405,10 @@ body {
   }
   .desktop main section > * { flex: none; } /* 子元素保持自然高度，超出的在格内滚动 */
   .desktop section h2, .desktop section h3 { margin-top: 0; }
-  /* 记一笔：输入框撑满左上格 */
-  .desktop #tab-capture { overflow-y: auto; }
-  .desktop #tab-capture textarea { flex: 1; }
-  /* 待处理：列表撑满右上格，格内滚动 */
-  .desktop #pending-list { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
-  /* 流水：列表撑满左下格，格内滚动 */
+  /* 流水：列表撑满左栏，栏内滚动 */
   .desktop #tab-list { display: flex; flex-direction: column; }
   .desktop #list-items { flex: 1; min-height: 0; overflow-y: auto; padding-right: 5px; }
-  /* 统计：整格内部滚动 */
+  /* 统计：整栏内部滚动 */
   .desktop #tab-stats { overflow-y: auto; }
   .row-card { cursor: pointer; }
 

@@ -21,7 +21,7 @@
 
   <main>
     <div id="model-alert" class="model-alert hidden"></div>
-    <section id="tab-capture">
+    <section id="tab-capture" hidden>
       <h2>记一笔</h2>
       <p class="hint">粘贴交易通知 / 点「选截图」识别支付截图 / 电脑上可直接 Ctrl+V 粘贴截图</p>
       <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
@@ -71,9 +71,7 @@
   </main>
 
   <nav class="tabs">
-    <button class="tab active" data-tab="capture"><span class="tab-ico">✏️</span><span>记一笔</span></button>
-    <button class="tab" data-tab="pending"><span class="tab-ico">⏳</span><span>待处理</span></button>
-    <button class="tab" data-tab="list"><span class="tab-ico">📄</span><span>流水</span></button>
+    <button class="tab active" data-tab="list"><span class="tab-ico">📄</span><span>流水</span></button>
     <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
   </nav>
 
