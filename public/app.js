@@ -165,10 +165,29 @@
     currentEditor = null
   }
 
+  // ---------- 响应式：手机单页 / 电脑仪表盘 ----------
+  const mqDesktop = window.matchMedia('(min-width: 960px)')
+  let isDesktop = mqDesktop.matches
+  function applyLayout() {
+    isDesktop = mqDesktop.matches
+    document.body.classList.toggle('desktop', isDesktop)
+    if (isDesktop) {
+      ;['capture', 'pending', 'list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = false })
+      renderPending().catch(() => {})
+      renderList().catch(() => {})
+      renderStats().catch(() => {})
+    } else {
+      switchTab(document.querySelector('.tab.active')?.dataset.tab || 'capture')
+    }
+  }
+  mqDesktop.addEventListener('change', applyLayout)
+
   const TAB_RENDER = { pending: renderPending, list: renderList, stats: renderStats }
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
-    ;['capture', 'pending', 'list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = t !== name })
+    if (!isDesktop) {
+      ;['capture', 'pending', 'list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = t !== name })
+    }
     if (TAB_RENDER[name]) TAB_RENDER[name]()
   }
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)))
@@ -560,7 +579,8 @@
     $('stats-cards').innerHTML = `
       <div class="stat-card"><div class="stat-num income">+${fmtMoney(s.income)}</div><div class="stat-label">收入</div></div>
       <div class="stat-card"><div class="stat-num expense">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
-      <div class="stat-card"><div class="stat-num">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>`
+      <div class="stat-card"><div class="stat-num">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
+      <div class="stat-card"><div class="stat-num ${s.pendingCount ? 'chip-warn' : ''}">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
     const cats = s.byCategory || []
     const max = cats.length ? Math.max(...cats.map((c) => c.total)) : 0
     $('stats-cats').innerHTML = cats.length ? cats.map((c, i) => `
@@ -628,6 +648,11 @@
 
   function refreshAll() {
     renderPending().catch(() => {})
+    if (isDesktop) {
+      renderList().catch(() => {})
+      renderStats().catch(() => {})
+      return
+    }
     const active = document.querySelector('.tab.active')?.dataset.tab
     if (active === 'list') renderList().catch(() => {})
     if (active === 'stats') renderStats().catch(() => {})
@@ -1008,6 +1033,7 @@
     }
     fillBudgetSelect()
     budgetActions()
+    applyLayout()
     updateChip()
     syncNow()
     setInterval(syncNow, 30000)
