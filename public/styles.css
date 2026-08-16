@@ -74,6 +74,11 @@ main section[hidden] { display: none !important; }
   animation: shine 3.4s ease-in-out infinite;
 }
 .logo h1 { font-size: 17px; margin: 0; letter-spacing: .3px; font-weight: 700; }
+.ver-chip {
+  font-size: 11px; color: var(--dim); background: var(--card2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px;
+  font-variant-numeric: tabular-nums;
+}
 .topbar-right { display: flex; gap: 8px; align-items: center; }
 
 /* ---------- 主区域 / 面板骨架 ---------- */
@@ -427,8 +432,8 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ================= 电脑版（左右两栏仪表盘；仅真电脑生效） ================= */
-@media (min-width: 960px) and (pointer: fine) {
+/* ================= 电脑版（左右两栏仪表盘；仅真电脑生效，半屏窗口也启用） ================= */
+@media (min-width: 760px) and (pointer: fine) {
   .tabs { display: none; }
   .chat-fab { bottom: 24px; right: 24px; }
   main {

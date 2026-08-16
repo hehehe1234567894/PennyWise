@@ -171,8 +171,8 @@
     currentEditor = null
   }
 
-  // ---------- 响应式：手机单页竖排 / 电脑田字仪表盘（细指针才算电脑） ----------
-  const mqDesktop = window.matchMedia('(min-width: 960px) and (pointer: fine)')
+  // ---------- 响应式：手机单页竖排 / 电脑左右两栏（细指针 + 较宽视口才算电脑） ----------
+  const mqDesktop = window.matchMedia('(min-width: 760px) and (pointer: fine)')
   let isDesktop = mqDesktop.matches
   function applyLayout() {
     isDesktop = mqDesktop.matches
@@ -1246,7 +1246,14 @@
     syncNow()
     setInterval(syncNow, 30000)
     setInterval(() => { refreshEndpoints().catch(() => {}) }, 60000)
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
+        // 每分钟检查一次新版本：发布更新后无需手动刷新，自动生效
+        setInterval(() => { reg.update().catch(() => {}) }, 60 * 1000)
+        // 新版本接管后自动刷新一次（事件只在接管时触发一次，不会循环）
+        navigator.serviceWorker.addEventListener('controllerchange', () => location.reload())
+      }).catch(() => {})
+    }
   }
 
   // ---------- 初始化 ----------

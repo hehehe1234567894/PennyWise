@@ -1,5 +1,5 @@
-/* PennyWise Service Worker：应用壳缓存 + 分享接收（截图/文本直达账本，无需快捷指令） */
-const CACHE = 'pennywise-v23'
+/* PennyWise Service Worker：分享接收 + 网络优先缓存（每次打开都是最新界面，断网才用缓存） */
+const CACHE = 'pennywise-v24'
 const SHELL = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icons/icon.svg']
 
 function uidGen() {
@@ -92,16 +92,17 @@ self.addEventListener('fetch', (e) => {
   }
   if (e.request.method !== 'GET') return
   if (url.pathname.startsWith('/api/')) return // 网络直通，不缓存
+  // 网络优先：保证每次打开都是最新界面；网络失败才退回缓存（离线兜底）
   e.respondWith(
-    caches.match(e.request).then((hit) => {
+    fetch(e.request).then((res) => {
+      if (res.ok && url.origin === location.origin) {
+        const clone = res.clone()
+        caches.open(CACHE).then((c) => c.put(e.request, clone))
+      }
+      return res
+    }).catch(() => caches.match(e.request).then((hit) => {
       if (hit) return hit
-      return fetch(e.request).then((res) => {
-        if (res.ok && url.origin === location.origin) {
-          const clone = res.clone()
-          caches.open(CACHE).then((c) => c.put(e.request, clone))
-        }
-        return res
-      }).catch(() => (e.request.mode === 'navigate' ? caches.match('/index.html') : Response.error()))
-    })
+      return e.request.mode === 'navigate' ? caches.match('/index.html') : Response.error()
+    }))
   )
 })
