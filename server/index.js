@@ -7,7 +7,8 @@ import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
 import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv, parseBankCsv } from './importer.js'
-import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport } from './reporter.js'
+import { pollMailCapture } from './mailin.js'
+import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
 import { shortcutFile } from './shortcut.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
@@ -70,6 +71,7 @@ app.get('/api/health', (req, res) => {
     autoConfirm: autoConfirmAt(),
     modelStatus: getModelStatus(),
     billImport: { ...billStatus, enabled: billStatus.enabled || mailConfig().billsEnabled },
+    mailCapture: { ...mailCaptureStatus, enabled: mailCaptureStatus.enabled || (mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1') },
   })
 })
 
@@ -242,11 +244,35 @@ app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb'
   res.json({ ok: true, data: await importBillRows(parsed.rows) })
 })
 
+// ---- 邮箱沟通 AI Agent（只读"自己发的、主题为 PW"的邮件，自动处理并回信） ----
+const mailCaptureStatus = { enabled: false, lastRun: null, processed: 0, error: '' }
+async function runMailCapture() {
+  mailCaptureStatus.enabled = mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1'
+  try {
+    const r = await pollMailCapture(mailConfig(), autoConfirmAt())
+    mailCaptureStatus.lastRun = nowIso()
+    mailCaptureStatus.processed = r.processed
+    mailCaptureStatus.error = r.error || ''
+    return r
+  } catch (e) {
+    mailCaptureStatus.lastRun = nowIso()
+    mailCaptureStatus.error = String(e?.message || e).slice(0, 200)
+    return { processed: 0, error: mailCaptureStatus.error }
+  }
+}
+app.post('/api/mail-capture', async (req, res) => {
+  if (!(mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1')) {
+    return fail(res, 400, 'not_configured', '未开启邮箱沟通（.env 里 MAIL_CAPTURE=1），见 README')
+  }
+  res.json({ ok: true, data: await runMailCapture() })
+})
+
 // ---- 月度报告（邮箱 / Server酱 微信推送） ----
-app.get('/api/report/preview', (req, res) => {
+app.get('/api/report/preview', async (req, res) => {
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
   const s = summarizeMonth(month)
-  res.json({ ok: true, data: { text: buildReportText(s), channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
+  const narrative = await generateReportNarrative(s)
+  res.json({ ok: true, data: { text: buildReportText(s, narrative), narrative, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
 })
 
 app.post('/api/report', async (req, res) => {
@@ -583,6 +609,11 @@ app.listen(PORT, '0.0.0.0', () => {
   if (mailConfig().billsEnabled) {
     setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
+  }
+  // 邮箱沟通 AI Agent：配置后每 3 分钟检查一次"自己发的、主题 PW"的邮件
+  if (mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1') {
+    setTimeout(() => { runMailCapture().catch(() => {}) }, 10000)
+    setInterval(() => { runMailCapture().catch(() => {}) }, 3 * 60 * 1000)
   }
   // 月度报告：每 30 分钟检查一次是否到发送时刻
   setInterval(() => { checkMonthlyReport().catch(() => {}) }, 30 * 60 * 1000)

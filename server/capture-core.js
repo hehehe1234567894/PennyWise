@@ -34,6 +34,28 @@ export function autoConfirmFrom(v) {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.9
 }
 
+// 把已解析字段入库（规则记忆 + 自动入账阈值），供文本/短信/邮箱 Agent 共用
+export function insertFieldsTx(fields, rawText, clientId, sourceLabel, threshold) {
+  const f = { ...fields }
+  if (f.merchant && f.direction === 'expense') {
+    const rule = ruleFor(f.merchant)
+    if (rule) {
+      f.category = rule.category
+      if (typeof f.confidence === 'number') f.confidence = Math.min(1, f.confidence + 0.1)
+    }
+  }
+  const status = (f.amount != null && f.confidence != null && f.confidence >= threshold) ? 'confirmed' : 'pending'
+  const info = db.prepare(`
+    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+  `).run(
+    newUid(), clientId, f.ts || nowIso(), nowIso(), f.amount, f.direction, f.merchant, f.goods_name,
+    f.direction === 'expense' ? (f.category || '其他') : null,
+    f.account, rawText || '', null, sourceLabel, status, f.confidence, f.note || '', nextRev(), nowIso(),
+  )
+  return { transaction: getTx(info.lastInsertRowid), status }
+}
+
 export async function captureTextCore(text, clientId, sourceLabel, threshold) {
   const raw = text.trim().slice(0, 4000)
   const result = await parseCapture(raw)
@@ -50,28 +72,8 @@ export async function captureTextCore(text, clientId, sourceLabel, threshold) {
   } else {
     parse = { code: result.code, error: result.error || '' }
   }
-
-  // 规则记忆：同一商户自动套用历史分类并提高置信度
-  if (fields.merchant && fields.direction === 'expense') {
-    const rule = ruleFor(fields.merchant)
-    if (rule) {
-      fields.category = rule.category
-      if (typeof parse.confidence === 'number') parse.confidence = Math.min(1, parse.confidence + 0.1)
-    }
-  }
-
-  // 自动入账：解析成功且置信度达标 → 直接确认
-  const status = (parse.code === 'ok' && fields.amount != null && fields.confidence != null && fields.confidence >= threshold) ? 'confirmed' : 'pending'
-
-  const info = db.prepare(`
-    INSERT INTO transactions (uid, client_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, raw_image, source, status, confidence, note, edited, rev, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'CNY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-  `).run(
-    newUid(), clientId, fields.ts, nowIso(), fields.amount, fields.direction, fields.merchant, fields.goods_name,
-    fields.direction === 'expense' ? (fields.category || '其他') : null,
-    fields.account, raw, null, sourceLabel, status, fields.confidence, fields.note, nextRev(), nowIso(),
-  )
-  return { transaction: getTx(info.lastInsertRowid), parse }
+  const { transaction } = insertFieldsTx(fields, raw, clientId, sourceLabel, threshold)
+  return { transaction, parse }
 }
 
 export async function captureImageCore(buf, mime, clientId, sourceLabel, threshold) {

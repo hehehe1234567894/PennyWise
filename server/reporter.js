@@ -1,5 +1,6 @@
 import { db } from './db.js'
 import { env } from './env.js'
+import { llmConfig } from './llm.js'
 import nodemailer from 'nodemailer'
 
 // ================= 月度报告（邮箱 / Server酱微信推送） =================
@@ -74,9 +75,38 @@ export function billImportStale() {
   return Date.now() - t > 35 * 24 * 3600 * 1000
 }
 
+// LLM 撰写月报分析（数据 → 洞察；模型不可用时返回空，回退模板报告）
+export async function generateReportNarrative(s) {
+  const cfg = llmConfig()
+  if (!cfg.enabled) return ''
+  const data = JSON.stringify({
+    月: s.month, 收入: s.income, 支出: s.expense, 退款: s.refund, 结余: s.balance, 笔数: s.count,
+    支出分类: (s.byCategory || []).slice(0, 6).map((c) => `${c.name} ${c.total}(${c.n}笔)`),
+    最大支出: (s.topExpenses || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
+    收入明细: (s.incomes || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
+    上月支出: s.prevExpense, 环比: s.diffPct, 待处理: s.pendingCount,
+  })
+  const sys = '你是个人财务分析助手。根据给出的月度数据写一段 120-200 字的简体中文分析：①本月亮点与问题；②最值得关注的一两处（最大支出、异常分类、环比变化）；③一条切实可行的建议。语气亲切专业，不重复罗列全部数据。'
+  try {
+    const res = await fetch(`${cfg.base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: data }],
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(45000),
+    })
+    if (!res.ok) return ''
+    const j = await res.json()
+    return String(j?.choices?.[0]?.message?.content || '').trim().slice(0, 600)
+  } catch { return '' }
+}
+
 const BILL_REMINDER = '微信/支付宝账单已超过 35 天未导入。支付宝可在 App 里开启"每月自动发送账单到邮箱"（设置一次永久自动）；微信账单请每月在 微信 → 我 → 服务 → 钱包 → 账单 → 下载账单 手动发送到邮箱（发送后自动入库，无需其他操作）。'
 
-export function buildReportText(s) {
+export function buildReportText(s, narrative = '') {
   const lines = []
   lines.push(`PennyWise 月度报告 · ${monthLabel(s.month)}`)
   lines.push('━━━━━━━━━━━━━━━━')
@@ -86,6 +116,11 @@ export function buildReportText(s) {
   lines.push(`结余    ${money(s.balance)}`)
   if (s.diffPct !== null) lines.push(`支出环比  ${s.diffPct > 0 ? '↑' : '↓'}${Math.abs(s.diffPct)}%（上月 ${money(-s.prevExpense)}）`)
   if (s.pendingCount > 0) lines.push(`待处理  ${s.pendingCount} 条`)
+  if (narrative) {
+    lines.push('')
+    lines.push('📝 AI 分析')
+    lines.push(narrative)
+  }
   lines.push('')
   if (s.byCategory.length) {
     lines.push('支出分类 TOP：')
@@ -110,7 +145,7 @@ export function buildReportText(s) {
   return lines.join('\n')
 }
 
-export function buildReportHtml(s) {
+export function buildReportHtml(s, narrative = '') {
   const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const catRows = s.byCategory.slice(0, 6).map((c) => `<tr><td>${esc(c.name)}</td><td>${money(-c.total)}</td><td>${c.n} 笔</td></tr>`).join('')
   const topRows = s.topExpenses.map((t) => `<tr><td>${money(-t.amount)}</td><td>${esc(t.merchant || '')}${t.goods_name ? '（' + esc(t.goods_name) + '）' : ''}</td><td>${esc(t.category || '')}</td></tr>`).join('')
@@ -118,6 +153,9 @@ export function buildReportHtml(s) {
   const diff = s.diffPct !== null ? `<p>支出环比：<b>${s.diffPct > 0 ? '↑' : '↓'}${Math.abs(s.diffPct)}%</b>（上月 ${money(-s.prevExpense)}）</p>` : ''
   const reminder = billImportStale()
     ? `<p style="background:#2a2410;border:1px solid #f59e0b55;color:#fbbf24;border-radius:8px;padding:10px 12px;font-size:13px">⚠ ${esc(BILL_REMINDER)}</p>`
+    : ''
+  const aiSection = narrative
+    ? `<div style="background:#12231a;border:1px solid #22c55e55;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#22c55e;font-size:12px;font-weight:700;margin-bottom:6px">📝 AI 分析</div><div style="font-size:14px;line-height:1.7">${esc(narrative).replace(/\n/g, '<br>')}</div></div>`
     : ''
   return `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#0f1115;color:#e8eaf0;padding:24px">
@@ -130,6 +168,7 @@ export function buildReportHtml(s) {
 </div>
 ${diff}
 ${reminder}
+${aiSection}
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">支出分类</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">${catRows || '<tr><td>本月暂无支出</td></tr>'}</table>
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">最大支出</h3>
@@ -175,14 +214,15 @@ export async function sendServerChan(title, text) {
   }
 }
 
-// 发送某月报告到所有已配置渠道
+// 发送某月报告到所有已配置渠道（LLM 撰写分析，失败自动回退模板）
 export async function sendMonthlyReport(month) {
   const s = summarizeMonth(month)
+  const narrative = await generateReportNarrative(s)
   const title = `PennyWise 月报 · ${monthLabel(month)}`
   const channels = []
-  const email = await sendEmail(title, buildReportHtml(s))
+  const email = await sendEmail(title, buildReportHtml(s, narrative))
   channels.push({ name: 'email', ...email })
-  const chan = await sendServerChan(title, buildReportText(s))
+  const chan = await sendServerChan(title, buildReportText(s, narrative))
   channels.push({ name: 'serverchan', ...chan })
   return { summary: s, channels, sent: channels.filter((c) => c.ok).length }
 }
