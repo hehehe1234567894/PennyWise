@@ -1128,6 +1128,47 @@
   window.addEventListener('online', () => { updateChip(); syncNow(); refreshEndpoints().catch(() => {}) })
   window.addEventListener('offline', updateChip)
 
+  // ---------- AI 助手（网页聊天，与邮箱 Agent 同一套逻辑） ----------
+  let chatGreeted = false
+  $('btn-chat').addEventListener('click', () => {
+    $('chat-modal').classList.remove('hidden')
+    if (!chatGreeted) {
+      chatGreeted = true
+      addChatMsg('ai', '你好！我是 PennyWise 的 AI 助手 🤖\n\n· 发交易文本给我直接记账（如"全家便利店 18.5 元"）\n· 问账目（如"这个月餐饮花了多少"）\n· 求平替（如"想买 100 元的洗发水，有更好的推荐吗"）')
+    }
+    $('chat-input').focus()
+  })
+  $('[data-close-chat]').addEventListener('click', () => $('chat-modal').classList.add('hidden'))
+  $('chat-modal').addEventListener('click', (e) => {
+    if (e.target === $('chat-modal')) $('chat-modal').classList.add('hidden')
+  })
+  function addChatMsg(who, text) {
+    const el = document.createElement('div')
+    el.className = 'msg ' + who
+    el.textContent = text
+    $('chat-msgs').appendChild(el)
+    $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight
+  }
+  async function sendChat() {
+    const text = $('chat-input').value.trim()
+    if (!text) return
+    $('chat-input').value = ''
+    addChatMsg('user', text)
+    try {
+      const d = await api('/api/agent', { method: 'POST', body: { text } })
+      addChatMsg('ai', d.reply || '（没有回复）')
+      if (d.kind === 'record') {
+        syncNow()
+        renderList().catch(() => {})
+        renderStats().catch(() => {})
+      }
+    } catch (e) {
+      addChatMsg('ai', '发送失败：' + e.message)
+    }
+  }
+  $('chat-send').addEventListener('click', sendChat)
+  $('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat() })
+
   // ---------- 锁定屏 ----------
   function showLock() {
     $('lock-screen').classList.remove('hidden')

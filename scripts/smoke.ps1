@@ -39,14 +39,14 @@ try {
   if ($leftovers.Count -gt 0) { Write-Host "INFO  pre-cleaned $($leftovers.Count) leftover test rows" -ForegroundColor Yellow }
 } catch { }
 
-# 1. endpoints: 除 /qr 外全部需要令牌（本机/远程一视同仁）
+# 1. endpoints: everything except /qr requires token (local or remote)
 Check 'health requires token (401)' ((StatusOf GET '/api/health') -eq 401)
 $h = Call GET '/api/health'
 Check 'health endpoint' ($h.ok -eq $true)
 Check 'config requires token (401)' ((StatusOf GET '/api/config') -eq 401)
 Check 'config says token required' ((Call GET '/api/config').tokenRequired -eq $true)
 
-# 1b. reachability（需令牌） & 跨站防护
+# 1b. reachability (needs token) & cross-site protection
 $rc = Call GET '/api/reachability'
 Check 'reachability endpoint' ($rc.ok -eq $true -and $rc.port -eq 8720)
 Check 'reachability lists addresses' (($rc.lan.Count + $rc.tailscale.Count) -ge 1)
@@ -61,7 +61,7 @@ Check 'evil preflight rejected (403)' ($preEvil -eq '403')
 $preOk = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H "Origin: $base" -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
 Check 'same-origin preflight 204' ($preOk -eq '204')
 
-# 1c. QR pairing: /qr 是唯一公开端点（纯文本转 SVG）；connect-info 无论本机远程都需令牌
+# 1c. QR pairing: /qr is the only public endpoint (text to SVG); connect-info always needs token
 $qr = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/qr?text=test&size=100"
 Check 'qr endpoint returns svg' ($qr.StatusCode -eq 200 -and $qr.Content -match '<svg')
 Check 'connect-info rejected locally without token (401)' ((StatusOf GET '/api/connect-info') -eq 401)
@@ -76,6 +76,12 @@ Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.m
 # 1e. automation extras (SMS auto-capture junk-skip, iOS shortcut download)
 $smsj = (curl.exe -s -X POST -H "X-Auth-Token: $token" -H 'Content-Type: text/plain' --data-binary 'hello 123 test verification code 456789' "$base/api/sms") | ConvertFrom-Json
 Check 'sms junk silently skipped' ($smsj.ok -and $smsj.data.skipped -eq $true)
+# AI agent endpoint: empty text must be 400 (no LLM call, zero cost)
+$agent400 = $false
+try {
+  Invoke-WebRequest -UseBasicParsing -Method POST -Uri "$base/api/agent" -Headers @{ 'X-Auth-Token' = $token } -ContentType 'application/json' -Body '{"text":""}' -ErrorAction Stop | Out-Null
+} catch { $agent400 = ([int]$_.Exception.Response.StatusCode.value__ -eq 400) }
+Check 'agent rejects empty text (400)' $agent400
 $scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut?t=$token"
 Check 'shortcut file downloadable with token' ($scCode -eq '200')
 Check 'shortcut rejected locally without token (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut") -eq '401')
@@ -95,7 +101,7 @@ Check 'reachability requires token remotely (401)' ((StatusOf GET '/api/reachabi
 Check 'shortcut requires auth remotely (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$extBase/shortcut") -eq '401')
 
 # 3. capture (LLM parses; high confidence auto-confirms, otherwise stays pending)
-# 记录基线（账本可能已有真实数据，断言按差值）
+# record baseline (ledger may contain real data; assert by delta)
 $baseSum = Call GET '/api/summary'
 $baseExpense = $baseSum.data.expense
 $basePending = $baseSum.data.pendingCount
@@ -109,7 +115,7 @@ $dup = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; cl
 $dupId = $dup.data.transaction.id
 $dup2 = Call POST '/api/capture' @{ text = 'WeChat Pay: FamilyMart CNY 18.50'; client_id = $dup.data.transaction.client_id }
 Check 'outbox retry is idempotent' ($dup2.data.parse.code -eq 'duplicate')
-Call DELETE "/api/transactions/$dupId" | Out-Null  # 清理重复项，避免影响汇总断言
+Call DELETE "/api/transactions/$dupId" | Out-Null  # remove duplicate to keep summary assertions clean
 
 # 5. register a custom category (also exercises the categories API; idempotent)
 $catsBefore = (Call GET '/api/categories').data

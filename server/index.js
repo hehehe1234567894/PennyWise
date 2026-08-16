@@ -11,6 +11,7 @@ import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv
 import { pollMailCapture } from './mailin.js'
 import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
 import { analyzeBillForAlternatives } from './recommend.js'
+import { agentChat } from './agent.js'
 import { shortcutFile } from './shortcut.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
@@ -256,6 +257,14 @@ app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (r
     return res.json({ ok: true, data: { skipped: true, reason: '非交易短信' } })
   }
   res.json({ ok: true, data: { skipped: false, transaction: r.transaction } })
+})
+
+// ---- AI 助手（网页聊天；与主题为 PW 的邮箱沟通共用同一套 Agent） ----
+app.post('/api/agent', async (req, res) => {
+  const { text } = req.body || {}
+  if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
+  const r = await agentChat(text, autoConfirmAt())
+  res.json({ ok: true, data: r })
 })
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----

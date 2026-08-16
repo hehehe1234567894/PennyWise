@@ -75,6 +75,19 @@
     <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
   </nav>
 
+  <button id="btn-chat" class="chat-fab" title="AI 助手">🤖</button>
+
+  <div id="chat-modal" class="modal hidden">
+    <div class="modal-card chat-card">
+      <div class="modal-head"><span>🤖 AI 助手</span><button class="icon-btn" data-close-chat>✕</button></div>
+      <div id="chat-msgs" class="chat-msgs"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="记一笔 / 问账目 / 求平替推荐…" autocomplete="off">
+        <button id="chat-send" class="btn btn-primary">发送</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal" class="modal hidden">
     <div class="modal-card">
       <div class="modal-head"><span id="modal-title"></span><button class="icon-btn" data-close>✕</button></div>

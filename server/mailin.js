@@ -1,10 +1,9 @@
 import { env } from './env.js'
-import { db, nowIso, validTs } from './db.js'
+import { db } from './db.js'
 import { ImapFlow } from 'imapflow'
 import { parseMime } from './importer.js'
-import { detectImage, captureImageCore, insertFieldsTx } from './capture-core.js'
-import { agentRoute, agentPhraseImageResult } from './agent.js'
-import { recommendAlternatives } from './recommend.js'
+import { detectImage, captureImageCore } from './capture-core.js'
+import { agentChat, agentPhraseImageResult } from './agent.js'
 import { mailerConfig, sendEmail } from './reporter.js'
 
 // ================= 邮箱沟通 AI Agent（只读"自己发的、主题为 PW"的邮件） =================
@@ -35,33 +34,8 @@ export async function processPwMail(text, attachments, threshold) {
   }
   const q = String(text || '').trim()
   if (!q) return { kind: 'empty', reply: '没有可处理的内容：把交易文本写在正文、附支付截图即可记账；也可以直接问"想买 XX，有平替推荐吗"或"这个月我花了多少"。' }
-  // AI Agent 路由：record / recommend / ledger / chat
-  const route = await agentRoute(q)
-  if (route.intent === 'record' && route.fields) {
-    const f = route.fields
-    const fields = {
-      ts: validTs(f.ts) || nowIso(),
-      amount: Number(f.amount) > 0 ? Math.round(Number(f.amount) * 100) / 100 : null,
-      direction: ['expense', 'income', 'refund', 'transfer'].includes(f.direction) ? f.direction : 'expense',
-      merchant: String(f.merchant || '').trim().slice(0, 120),
-      goods_name: String(f.goods_name || '').trim().slice(0, 120),
-      category: f.direction === 'expense' ? String(f.category || '其他').trim().slice(0, 20) : null,
-      account: ['wechat', 'alipay', 'bank', 'cash', 'other'].includes(f.account) ? f.account : 'other',
-      note: String(f.note || '').trim().slice(0, 200),
-      confidence: Number.isFinite(Number(f.confidence)) ? Math.min(1, Math.max(0, Number(f.confidence))) : null,
-    }
-    if (fields.amount == null) {
-      return { kind: 'record_fail', reply: route.reply || '没能从内容里确认金额，请补充金额后重发。' }
-    }
-    const { status } = insertFieldsTx(fields, q, null, 'email', threshold)
-    const tail = status === 'confirmed' ? '已自动入账 ✓' : '已记入待处理，请到 PennyWise 确认'
-    return { kind: 'record', reply: `${route.reply || '已记账'}\n（${tail}）` }
-  }
-  if (route.intent === 'recommend') {
-    const r = await recommendAlternatives(q)
-    return { kind: 'recommend', reply: r.text }
-  }
-  return { kind: route.intent || 'chat', reply: route.reply || '收到。' }
+  // AI Agent 路由：record / recommend / ledger / chat（与网页聊天共用）
+  return agentChat(q, threshold)
 }
 
 export async function pollMailCapture(cfg, threshold) {

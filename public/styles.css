@@ -318,6 +318,40 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4a6b; }
 
+/* ---------- AI 助手 ---------- */
+.chat-fab {
+  position: fixed; right: 16px; bottom: 96px; z-index: 40;
+  width: 54px; height: 54px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff; border: none; font-size: 23px; cursor: pointer;
+  box-shadow: 0 6px 22px rgba(79,140,255,.45);
+  transition: transform .15s, box-shadow .15s;
+}
+.chat-fab:hover { transform: translateY(-2px) scale(1.05); box-shadow: 0 9px 28px rgba(79,140,255,.55); }
+.chat-fab:active { transform: scale(.96); }
+.chat-card { display: flex; flex-direction: column; max-height: min(72vh, 660px); }
+.chat-msgs {
+  flex: 1; min-height: 200px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 9px; padding: 2px 2px 8px;
+}
+.msg {
+  max-width: 84%; padding: 9px 13px; border-radius: 15px;
+  font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+  animation: fadeUp .22s ease both;
+}
+.msg.user {
+  align-self: flex-end; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-bottom-right-radius: 4px;
+}
+.msg.ai {
+  align-self: flex-start; background: var(--card2);
+  border: 1px solid var(--border); border-bottom-left-radius: 4px;
+}
+.chat-input-row { display: flex; gap: 8px; margin-top: 10px; }
+.chat-input-row input { flex: 1; min-width: 0; }
+.chat-input-row .btn { flex: none; }
+
 /* ================= 动画系统 ================= */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 @keyframes popIn { from { opacity: 0; transform: scale(.94) translateY(10px); } to { opacity: 1; transform: none; } }
@@ -387,6 +421,7 @@ body {
 @media (min-width: 960px) and (pointer: fine) {
   /* 内容全部铺开，不再需要切换栏 */
   .tabs { display: none; }
+  .chat-fab { bottom: 24px; right: 24px; }
   main {
     max-width: 1360px;
     height: calc(100vh - 60px);     /* 整个仪表盘一屏放下 */
