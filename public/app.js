@@ -662,6 +662,7 @@
     requestAnimationFrame(runCountUps)
     renderStatsExtra(s)
     renderBudget(month)
+    renderRecs(month)
   }
 
   // 信息面板：每日支出 / 分类环图 / 账户分布 / 近6月趋势 / 收支排行
@@ -773,8 +774,40 @@
           <div class="top-sub" style="margin-top:8px">💚 最大收入</div>
           ${topInc}
         </div>
+      </div>
+      <div class="stat-block" id="rec-block">
+        <div class="stat-block-title">💡 平替与优质推荐（本月账单）</div>
+        <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
       </div>`
     requestAnimationFrame(runCountUps)
+  }
+
+  // 账单驱动的平替/优质推荐（服务器缓存结果，force 重新分析）
+  async function renderRecs(month, force) {
+    const el = $('rec-block')
+    if (!el) return
+    el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">${force ? '重新分析中…（联网搜索需要一点时间）' : '分析中…（首次联网搜索需要一点时间）'}</p>`
+    try {
+      const d = await api('/api/recommend?month=' + encodeURIComponent(month) + (force ? '&force=1' : ''))
+      const items = d.items || []
+      if (!items.length) {
+        el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">这个月没发现值得优化的商品。想买具体东西？点右下角 🤖 AI 助手直接问。</p>`
+        return
+      }
+      el.innerHTML = `
+        <div class="stat-block-title">💡 平替与优质推荐（本月账单）<button class="btn btn-small" id="rec-refresh">重新生成</button></div>
+        ${items.map((it) => `
+          <div class="rec-item">
+            <div class="rec-head">🛒 ${esc(it.product)}</div>
+            <div class="rec-reason">${esc(it.reason || '')}</div>
+            ${it.cheaperText ? `<div class="rec-sec"><div class="rec-sec-t cheaper">💰 更便宜的方案</div><div class="rec-body">${esc(it.cheaperText)}</div></div>` : ''}
+            ${it.betterText ? `<div class="rec-sec"><div class="rec-sec-t better">✨ 更好的升级</div><div class="rec-body">${esc(it.betterText)}</div></div>` : ''}
+          </div>`).join('')}
+        <p class="rec-note">价格来自联网搜索，随时波动，仅供参考。想买其他东西？点右下角 🤖 AI 助手。</p>`
+      $('rec-refresh').addEventListener('click', () => renderRecs(month, true))
+    } catch (e) {
+      el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">推荐加载失败：${esc(e.message)}</p>`
+    }
   }
 
   // ---------- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----------

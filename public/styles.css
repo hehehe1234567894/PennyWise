@@ -304,6 +304,21 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .top-row b { flex: none; font-variant-numeric: tabular-nums; }
 .top-sub { font-size: 11px; color: var(--dim); margin-bottom: 2px; font-weight: 600; }
 
+/* 平替与优质推荐 */
+.rec-item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; margin-bottom: 10px; }
+.rec-head { font-weight: 700; font-size: 13.5px; }
+.rec-reason { color: var(--dim); font-size: 12px; margin: 3px 0 8px; }
+.rec-sec { margin-bottom: 8px; }
+.rec-sec-t { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+.rec-sec-t.cheaper { color: var(--green); }
+.rec-sec-t.better { color: var(--accent2); }
+.rec-body {
+  font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  background: var(--card2); border-radius: 8px; padding: 8px 10px;
+}
+.rec-note { color: var(--dim); font-size: 12px; margin: 4px 0 0; }
+#rec-refresh { margin-left: 8px; }
+
 /* 预算 */
 .cat-row { display: grid; grid-template-columns: 84px 1fr 92px; gap: 10px; align-items: center; margin-bottom: 9px; font-size: 13px; }
 .cat-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

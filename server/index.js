@@ -370,6 +370,7 @@ app.get('/api/report/preview', async (req, res) => {
   const s = summarizeMonth(month)
   const narrative = await generateReportNarrative(s)
   const alts = await analyzeBillForAlternatives(month)
+  if (alts.length) saveAltRec(month, alts)
   res.json({ ok: true, data: { text: buildReportText(s, narrative, alts), html: buildReportHtml(s, narrative, alts), narrative, alts, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
 })
 
@@ -380,6 +381,33 @@ app.post('/api/report', async (req, res) => {
   }
   const r = await sendMonthlyReport(month)
   res.json({ ok: true, data: { month, channels: r.channels } })
+})
+
+// ---- 平替与优质推荐（网页统计栏展示；结果缓存到 meta，force=1 强制重新分析） ----
+const altRecKey = (m) => `alt_rec_${m}`
+function cachedAltRec(m) {
+  try {
+    const v = db.prepare('SELECT v FROM meta WHERE k = ?').get(altRecKey(m))?.v
+    return v ? JSON.parse(v) : null
+  } catch { return null }
+}
+function saveAltRec(m, items) {
+  db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v')
+    .run(altRecKey(m), JSON.stringify(items || []))
+}
+app.get('/api/recommend', async (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  if (req.query.force !== '1') {
+    const cached = cachedAltRec(month)
+    if (cached) return res.json({ ok: true, data: { month, items: cached, cached: true } })
+  }
+  try {
+    const items = await analyzeBillForAlternatives(month)
+    if (items.length) saveAltRec(month, items)
+    res.json({ ok: true, data: { month, items, cached: false } })
+  } catch (e) {
+    fail(res, 500, 'server_error', '推荐生成失败：' + String(e?.message || e).slice(0, 100))
+  }
 })
 
 // 每月 1 日 REPORT_HOUR 点自动发送上月报告（用 meta 表防重复）
