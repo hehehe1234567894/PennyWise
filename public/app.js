@@ -644,7 +644,15 @@
       <div class="stat-card"><div class="stat-num" data-cnt="${Math.abs(s.balance)}" data-sign="${s.balance < 0 ? '-' : '+'}" data-dec="2">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
       <div class="stat-card"><div class="stat-num" data-cnt="${s.pendingCount}" data-sign="" data-dec="0">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
     requestAnimationFrame(runCountUps)
+    renderStatsExtra(s)
+    renderBudget(month)
+  }
+
+  // 信息面板：每日支出 / 分类环图 / 账户分布 / 近6月趋势 / 收支排行
+  function renderStatsExtra(s) {
+    // 分类环形图
     const cats = s.byCategory || []
+    let donutHtml = '<p class="empty">这个月还没有支出</p>'
     if (cats.length) {
       const totalCat = cats.reduce((a, c) => a + c.total, 0) || 1
       let acc = 0
@@ -653,7 +661,7 @@
         acc += (c.total / totalCat) * 100
         return `${catColor(c.name)} ${from}% ${acc}%`
       })
-      $('stats-cats').innerHTML = `
+      donutHtml = `
         <div class="donut-wrap">
           <div class="donut" style="background:conic-gradient(${stops.join(',')})">
             <div class="donut-center"><b data-cnt="${s.expense}" data-sign="-" data-dec="2">${fmtMoney(s.expense)}</b><span>总支出</span></div>
@@ -668,16 +676,7 @@
               </div>`).join('')}
           </div>
         </div>`
-    } else {
-      $('stats-cats').innerHTML = '<p class="empty">这个月还没有支出</p>'
     }
-    requestAnimationFrame(runCountUps)
-    renderStatsExtra(s)
-    renderBudget(month)
-  }
-
-  // 信息面板：每日支出 / 账户分布 / 近6月趋势 / TOP 支出收入
-  function renderStatsExtra(s) {
     // 每日支出柱状图
     const maxDay = Math.max(...s.days, 1)
     const todayIdx = new Date().getDate() - 1
@@ -738,24 +737,28 @@
       </div>
       <div class="stat-row">
         <div class="stat-block">
-          <div class="stat-block-title">💳 账户分布（支出）</div>
-          ${s.byAccount.length ? acctBar + acctRows : '<p class="empty">暂无数据</p>'}
+          <div class="stat-block-title">🍩 支出分类</div>
+          ${donutHtml}
         </div>
         <div class="stat-block">
-          <div class="stat-block-title">📈 近 6 个月支出</div>
-          <div class="day-chart" id="trend-chart"><div class="empty">加载中…</div></div>
+          <div class="stat-block-title">💳 账户分布（支出）</div>
+          ${s.byAccount.length ? acctBar + acctRows : '<p class="empty">暂无数据</p>'}
         </div>
       </div>
       <div class="stat-row">
         <div class="stat-block">
-          <div class="stat-block-title">🔥 最大支出 TOP5</div>
-          ${topExp}
+          <div class="stat-block-title">📈 近 6 个月支出</div>
+          <div class="day-chart" id="trend-chart"><div class="empty">加载中…</div></div>
         </div>
         <div class="stat-block">
-          <div class="stat-block-title">💚 最大收入 TOP5</div>
+          <div class="stat-block-title">🏆 收支排行 TOP5</div>
+          <div class="top-sub">🔥 最大支出</div>
+          ${topExp}
+          <div class="top-sub" style="margin-top:8px">💚 最大收入</div>
           ${topInc}
         </div>
       </div>`
+    requestAnimationFrame(runCountUps)
   }
 
   // ---------- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----------
