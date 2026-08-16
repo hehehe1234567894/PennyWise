@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS categories (
   name TEXT PRIMARY KEY,
   kind TEXT NOT NULL DEFAULT 'expense'
 );
+CREATE TABLE IF NOT EXISTS budgets (
+  month TEXT NOT NULL,
+  category TEXT NOT NULL,
+  limit_amount REAL NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (month, category)
+);
 `)
 
 // 播种默认分类

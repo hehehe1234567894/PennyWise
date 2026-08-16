@@ -268,6 +268,41 @@ app.post('/api/mail-capture', async (req, res) => {
   res.json({ ok: true, data: await runMailCapture() })
 })
 
+// ---- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----
+app.get('/api/budgets', (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  const rows = db.prepare(`
+    SELECT b.category, b.limit_amount AS lim, COALESCE(SUM(t.amount), 0) AS spent
+    FROM budgets b LEFT JOIN transactions t
+      ON t.category = b.category AND t.direction = 'expense' AND t.status = 'confirmed'
+      AND t.ts LIKE ? AND t.amount IS NOT NULL
+    WHERE b.month = ?
+    GROUP BY b.category, b.limit_amount ORDER BY b.category
+  `).all(month + '%', month)
+    .map((r) => ({ category: r.category, limit: Number(r.lim), spent: Math.round(Number(r.spent) * 100) / 100 }))
+  res.json({ ok: true, data: { month, list: rows } })
+})
+
+app.put('/api/budgets', (req, res) => {
+  const { month, category, limit } = req.body || {}
+  const m = typeof month === 'string' && /^\d{4}-\d{2}$/.test(month) ? month : currentMonth()
+  const cat = typeof category === 'string' ? category.trim().slice(0, 20) : ''
+  const lim = Number(limit)
+  if (!cat) return fail(res, 400, 'bad_request', '分类不能为空')
+  if (!Number.isFinite(lim) || lim <= 0) return fail(res, 400, 'bad_request', '限额必须为正数')
+  db.prepare('INSERT INTO budgets (month, category, limit_amount, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(month, category) DO UPDATE SET limit_amount = excluded.limit_amount, updated_at = excluded.updated_at')
+    .run(m, cat, Math.round(lim * 100) / 100, nowIso())
+  res.json({ ok: true, data: { month: m, category: cat, limit: Math.round(lim * 100) / 100 } })
+})
+
+app.delete('/api/budgets', (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  const category = String(req.query.category || '').trim()
+  if (!category) return fail(res, 400, 'bad_request', '分类不能为空')
+  db.prepare('DELETE FROM budgets WHERE month = ? AND category = ?').run(month, category)
+  res.json({ ok: true, data: { deleted: true } })
+})
+
 // ---- 月度报告（邮箱 / Server酱 微信推送） ----
 app.get('/api/report/preview', async (req, res) => {
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()

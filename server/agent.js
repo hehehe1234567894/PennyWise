@@ -7,7 +7,8 @@ import { llmConfig } from './llm.js'
 
 export function ledgerCtx() {
   const s = summarizeMonth(currentMonth())
-  return `本月支出 ¥${s.expense}，收入 ¥${s.income}，结余 ¥${s.balance}，共 ${s.count} 笔；支出分类：${(s.byCategory || []).slice(0, 5).map((c) => `${c.name}¥${c.total}(${c.n}笔)`).join('、') || '暂无'}；上月支出 ¥${s.prevExpense}${s.diffPct !== null ? `（环比${s.diffPct > 0 ? '+' : ''}${s.diffPct}%）` : ''}`
+  const budgets = (s.budgets || []).map((b) => `${b.category} ${b.spent}/${b.limit}${b.spent > b.limit ? '(超支)' : ''}`).join('、')
+  return `本月支出 ¥${s.expense}，收入 ¥${s.income}，结余 ¥${s.balance}，共 ${s.count} 笔；支出分类：${(s.byCategory || []).slice(0, 5).map((c) => `${c.name}¥${c.total}(${c.n}笔)`).join('、') || '暂无'}；上月支出 ¥${s.prevExpense}${s.diffPct !== null ? `（环比${s.diffPct > 0 ? '+' : ''}${s.diffPct}%）` : ''}；预算执行：${budgets || '未设置'}`
 }
 
 const AGENT_SYSTEM = `你是 PennyWise 个人记账系统的 AI 助手，通过邮件与用户沟通。根据邮件内容判断意图并处理：

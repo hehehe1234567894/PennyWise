@@ -51,6 +51,16 @@ export function summarizeMonth(month) {
     SELECT merchant, note, amount ${base} AND direction = 'income' ORDER BY amount DESC LIMIT 5
   `).all(like)
   const pendingCount = Number(db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE status = 'pending'").get()?.n ?? 0)
+  // 预算执行（借鉴 Firefly/Actual）
+  const budgets = db.prepare(`
+    SELECT b.category, b.limit_amount AS lim, COALESCE(SUM(t.amount), 0) AS spent
+    FROM budgets b LEFT JOIN transactions t
+      ON t.category = b.category AND t.direction = 'expense' AND t.status = 'confirmed'
+      AND t.ts LIKE ? AND t.amount IS NOT NULL
+    WHERE b.month = ?
+    GROUP BY b.category, b.limit_amount ORDER BY b.category
+  `).all(like, month)
+    .map((r) => ({ category: r.category, limit: Number(r.lim), spent: Math.round(Number(r.spent) * 100) / 100 }))
   // 环比：上月支出
   const [y, m] = String(month).split('-').map(Number)
   const prev = new Date(Date.UTC(y, m - 2, 1))
@@ -62,7 +72,7 @@ export function summarizeMonth(month) {
   return {
     month, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100,
     refund, transfer, balance: Math.round((income + refund - expense) * 100) / 100,
-    count, byCategory, topExpenses, incomes, pendingCount,
+    count, byCategory, topExpenses, incomes, pendingCount, budgets,
     prevExpense, diffPct: prevExpense > 0 ? Math.round(((expense - prevExpense) / prevExpense) * 100) : null,
   }
 }
@@ -86,6 +96,7 @@ export async function generateReportNarrative(s) {
     最大支出: (s.topExpenses || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
     收入明细: (s.incomes || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
     上月支出: s.prevExpense, 环比: s.diffPct, 待处理: s.pendingCount,
+    预算执行: (s.budgets || []).map((b) => `${b.category} ${b.spent}/${b.limit}${b.spent > b.limit ? '超支' : ''}`),
   })
   const sys = '你是个人财务分析助手。根据给出的月度数据写一段 120-200 字的简体中文分析：①本月亮点与问题；②最值得关注的一两处（最大支出、异常分类、环比变化）；③一条切实可行的建议。语气亲切专业，不重复罗列全部数据。'
   try {
@@ -135,6 +146,14 @@ export function buildReportText(s, narrative = '', alts = []) {
         lines.push('  ⬆️ 更好的：')
         lines.push(a.betterText)
       }
+    })
+  }
+  if (s.budgets && s.budgets.length) {
+    lines.push('')
+    lines.push('📋 预算执行')
+    s.budgets.forEach((b) => {
+      const over = b.spent > b.limit
+      lines.push(`  ${over ? '⚠' : '✓'} ${b.category}  ${money(-b.spent)} / ¥${b.limit}（${over ? '超支 ' + money(b.spent - b.limit) : '剩余 ' + money(b.limit - b.spent)}）`)
     })
   }
   lines.push('')
@@ -221,6 +240,19 @@ export function buildReportHtml(s, narrative = '', alts = []) {
   const altSection = alts.length
     ? `<div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#6d28d9;font-size:12px;font-weight:700;margin-bottom:8px">🛒 省钱与升级建议（根据你的账单）</div>${alts.map((a) => `<div style="margin-bottom:12px;font-size:14px;color:#1f2937"><b>${esc(a.product)}</b>${a.reason ? ` <span style="color:#6b7280;font-size:12px">（${esc(a.reason)}）</span>` : ''}${a.cheaperText ? `<div style="margin-top:4px;line-height:1.7"><span style="color:#15803d">💰 更便宜</span><br>${esc(a.cheaperText).replace(/\n/g, '<br>')}</div>` : ''}${a.betterText ? `<div style="margin-top:6px;line-height:1.7"><span style="color:#1d4ed8">⬆️ 更好的</span><br>${esc(a.betterText).replace(/\n/g, '<br>')}</div>` : ''}</div>`).join('')}</div>`
     : ''
+  const budgetSection = (s.budgets && s.budgets.length)
+    ? `<div style="margin:12px 0"><h3 style="font-size:14px;color:#374151;margin:0 0 8px">📋 预算执行</h3>${s.budgets.map((b) => {
+        const pct = Math.min(100, Math.round((b.spent / b.limit) * 100))
+        const over = b.spent > b.limit
+        return `<div style="display:flex;align-items:center;margin:7px 0;font-size:12px">
+        <div style="width:66px;color:#374151;flex:none">${esc(b.category)}</div>
+        <div style="flex:1;background:#eef1f5;border-radius:4px;height:14px;overflow:hidden">
+          <div style="width:${pct}%;height:14px;background:${over ? '#dc2626' : '#16a34a'};border-radius:4px"></div>
+        </div>
+        <div style="width:150px;text-align:right;color:${over ? '#b91c1c' : '#374151'};flex:none;font-weight:600">${money(-b.spent)} / ¥${b.limit} ${over ? '⚠超支' : '✓'}</div>
+      </div>`
+      }).join('')}</div>`
+    : ''
   return `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f3f4f6;color:#111827;padding:24px">
 <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:24px;border:1px solid #e5e7eb">
@@ -233,6 +265,7 @@ export function buildReportHtml(s, narrative = '', alts = []) {
 ${diff}
 ${reminder}
 ${aiSection}
+${budgetSection}
 ${altSection}
 <h3 style="font-size:14px;color:#374151;margin:16px 0 8px">📊 支出分类</h3>
 ${categoryBarsHtml(s)}

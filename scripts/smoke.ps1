@@ -157,6 +157,15 @@ $sum2 = Call GET '/api/summary'
 Check 'summary has pending count' ($sum2.data.pendingCount -ge ($basePending + 1))
 Call POST '/api/sync' @{ changes = @( @{ uid = $pendUid; type = 'del'; updated_at = (Get-Date).ToUniversalTime().AddSeconds(1).ToString('o') } ) } | Out-Null
 
+# 10c. budgets roundtrip (Firefly-style category limits)
+$bUp = Call PUT '/api/budgets' @{ month = '2026-08'; category = 'Dining'; limit = 100 }
+Check 'budget upsert' ($bUp.ok -and $bUp.data.limit -eq 100)
+$bList = Call GET '/api/budgets?month=2026-08'
+$bRow = $bList.data.list | Where-Object { $_.category -eq 'Dining' }
+Check 'budget list with spent' ($bList.ok -and $null -ne $bRow -and $bRow.limit -eq 100 -and $bRow.spent -ge 0)
+$bDel = Call DELETE '/api/budgets?month=2026-08&category=Dining'
+Check 'budget delete' ($bDel.ok)
+
 # 11. cleanup: remove rows and the custom category created by this run (keeps the test idempotent)
 Call DELETE "/api/transactions/$txId" | Out-Null
 Call DELETE '/api/categories/Dining' | Out-Null

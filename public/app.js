@@ -569,6 +569,61 @@
         <div class="cat-bar-wrap"><div class="cat-bar" style="width:${max ? Math.max(3, Math.round((c.total / max) * 100)) : 3}%;background:${CAT_COLORS[i % CAT_COLORS.length]}"></div></div>
         <div class="cat-amt">${fmtMoney(c.total)}</div>
       </div>`).join('') : '<p class="empty">这个月还没有支出</p>'
+    renderBudget(month)
+  }
+
+  // ---------- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----------
+  async function renderBudget(month) {
+    const list = $('budget-list')
+    try {
+      const d = await api('/api/budgets?month=' + encodeURIComponent(month))
+      if (!d.list.length) {
+        list.innerHTML = '<p class="empty">还没设置预算。选一个分类、填限额，保存后这里会显示进度。</p>'
+      } else {
+        list.innerHTML = d.list.map((b) => {
+          const pct = Math.min(100, Math.round((b.spent / b.limit) * 100))
+          const over = b.spent > b.limit
+          return `<div class="cat-row" data-cat="${esc(b.category)}">
+            <div class="cat-name">${esc(b.category)}</div>
+            <div class="cat-bar-wrap"><div class="cat-bar" style="width:${Math.max(3, pct)}%;background:${over ? '#ef4444' : '#22c55e'}"></div></div>
+            <div class="cat-amt ${over ? 'expense' : ''}">${fmtMoney(b.spent)}/${b.limit}</div>
+          </div>`
+        }).join('')
+      }
+    } catch (e) {
+      list.innerHTML = `<p class="empty">预算加载失败：${esc(e.message)}</p>`
+    }
+  }
+
+  function fillBudgetSelect() {
+    const sel = $('bud-cat')
+    const cur = sel.value
+    sel.innerHTML = categories.expense.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')
+    if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur
+  }
+
+  function budgetActions() {
+    $('bud-save').addEventListener('click', async () => {
+      const category = $('bud-cat').value
+      const limit = Number($('bud-limit').value)
+      if (!category) return toast('请选择分类')
+      if (!Number.isFinite(limit) || limit <= 0) return toast('请输入正确的限额')
+      try {
+        await api('/api/budgets', { method: 'PUT', body: { month: $('stats-month').value || localMonth(), category, limit } })
+        $('bud-limit').value = ''
+        toast('预算已保存')
+        renderBudget($('stats-month').value || localMonth())
+      } catch (e) { toast('保存失败：' + e.message) }
+    })
+    $('budget-list').addEventListener('click', async (e) => {
+      const row = e.target.closest('.cat-row')
+      if (!row || !confirm('删除这个预算？')) return
+      try {
+        await api('/api/budgets?month=' + encodeURIComponent($('stats-month').value || localMonth()) + '&category=' + encodeURIComponent(row.dataset.cat), { method: 'DELETE' })
+        toast('已删除')
+        renderBudget($('stats-month').value || localMonth())
+      } catch (err) { toast('删除失败：' + err.message) }
+    })
   }
 
   function refreshAll() {
@@ -951,6 +1006,8 @@
       const cached = (await mGet('meta', 'categories').catch(() => null))?.v
       if (cached) { try { categories = JSON.parse(cached) } catch { /* 忽略 */ } }
     }
+    fillBudgetSelect()
+    budgetActions()
     updateChip()
     syncNow()
     setInterval(syncNow, 30000)

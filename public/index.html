@@ -57,6 +57,15 @@
       <div id="stats-cards" class="stats-cards"></div>
       <h3>支出分类</h3>
       <div id="stats-cats"></div>
+      <h3>预算（本月）</h3>
+      <div class="btn-row">
+        <select id="bud-cat"></select>
+        <input id="bud-limit" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="限额（元）">
+      </div>
+      <div class="btn-row">
+        <button id="bud-save" class="btn btn-primary">保存预算</button>
+      </div>
+      <div id="budget-list"></div>
     </section>
   </main>
 
