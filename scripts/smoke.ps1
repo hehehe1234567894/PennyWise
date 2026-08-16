@@ -44,14 +44,20 @@ $h = Call GET '/api/health' -withToken $false
 Check 'health endpoint' ($h.ok -eq $true)
 Check 'config says token required' ((Call GET '/api/config' -withToken $false).tokenRequired -eq $true)
 
-# 1b. reachability & CORS (connection probing endpoints, public)
-$rc = Invoke-RestMethod -Uri "$base/api/reachability"
+# 1b. reachability（需令牌） & 跨站防护
+$rc = Call GET '/api/reachability'
 Check 'reachability endpoint' ($rc.ok -eq $true -and $rc.port -eq 8720)
 Check 'reachability lists addresses' (($rc.lan.Count + $rc.tailscale.Count) -ge 1)
-$cors = curl.exe -s -i -H 'Origin: http://example.com' "$base/api/reachability" | Select-String 'Access-Control-Allow-Origin'
-Check 'CORS allow-origin header' ($null -ne $cors)
-$pre = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H 'Origin: http://example.com' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
-Check 'CORS preflight returns 204' ($pre -eq '204')
+$evil = curl.exe -s -o NUL -w '%{http_code}' -H 'Origin: http://example.com' "$base/api/health"
+Check 'cross-site origin blocked (403)' ($evil -eq '403')
+$evilAcao = curl.exe -s -i -H 'Origin: http://example.com' "$base/api/health" | Select-String 'Access-Control-Allow-Origin'
+Check 'no ACAO for evil origin' ($null -eq $evilAcao)
+$sameAcao = curl.exe -s -i -H "Origin: $base" "$base/api/health" | Select-String 'Access-Control-Allow-Origin'
+Check 'same-origin ACAO echoed' ($null -ne $sameAcao)
+$preEvil = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H 'Origin: http://example.com' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
+Check 'evil preflight rejected (403)' ($preEvil -eq '403')
+$preOk = curl.exe -s -o NUL -w '%{http_code}' -X OPTIONS -H "Origin: $base" -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: X-Auth-Token' "$base/api/transactions"
+Check 'same-origin preflight 204' ($preOk -eq '204')
 
 # 1c. QR pairing: localhost is trusted without token, remote still requires it
 $qr = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/qr?text=test&size=100"
@@ -81,6 +87,8 @@ $extBase = "http://$($rc.lan[0].ip):8720"
 Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $extBase) -eq 401)
 Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 } $extBase) -eq 401)
 Check 'connect-info rejected remotely without token (401)' ((StatusOf GET '/api/connect-info' $null $extBase) -eq 401)
+Check 'reachability requires token remotely (401)' ((StatusOf GET '/api/reachability' $null $extBase) -eq 401)
+Check 'shortcut requires auth remotely (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$extBase/shortcut") -eq '401')
 
 # 3. capture (LLM parses; high confidence auto-confirms, otherwise stays pending)
 # 记录基线（账本可能已有真实数据，断言按差值）

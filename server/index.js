@@ -1,6 +1,7 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
@@ -35,28 +36,83 @@ app.use((req, res, next) => {
   next()
 })
 
-// ---- CORS：允许任何来源调用 API（安全性由 AUTH_TOKEN 保证）。
-// 手机端"连接检测"需要跨地址探测（如从 Tailscale 域名探测局域网 IP）。
-// 必须在鉴权之前挂载，让 OPTIONS 预检直接返回 204。 ----
+// ---- 安全边界：CORS 白名单（仅服务器自身地址）+ 跨站请求拦截 ----
+function ownHosts() {
+  const set = new Set()
+  set.add('localhost:' + PORT)
+  set.add('127.0.0.1:' + PORT)
+  try { set.add(os.hostname().toLowerCase() + ':' + PORT) } catch { /* 忽略 */ }
+  const { lan, tailscale } = scanInterfaces()
+  for (const x of [...lan, ...tailscale]) set.add(x.ip + ':' + PORT)
+  const ts = env('TAILSCALE_NAME', '').replace(/\/+$/, '').replace(/^https?:\/\//, '')
+  if (ts) { set.add(ts); set.add(ts + ':' + PORT) }
+  return set
+}
+let hostsCache = { at: 0, set: new Set() }
+function originAllowed(origin, host) {
+  const now = Date.now()
+  if (now - hostsCache.at > 30000) hostsCache = { at: now, set: ownHosts() }
+  let o = ''
+  try { o = new URL(origin).host } catch { return false }
+  return o === host || hostsCache.set.has(o)
+}
+
 app.use((req, res, next) => {
-  res.set('Access-Control-Allow-Origin', req.get('origin') || '*')
-  res.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-  res.set('Access-Control-Allow-Headers', 'Content-Type,X-Auth-Token')
-  res.set('Access-Control-Max-Age', '86400')
-  if (req.method === 'OPTIONS') return res.sendStatus(204)
+  // 浏览器发起的跨站请求一律拒绝（防恶意网页读写本机服务）
+  if (req.get('sec-fetch-site') === 'cross-site') {
+    return res.status(403).json({ ok: false, code: 'forbidden', error: '禁止跨站访问' })
+  }
+  const origin = req.get('origin')
+  if (origin) {
+    if (originAllowed(origin, req.get('host') || '')) {
+      res.set('Access-Control-Allow-Origin', origin)
+      res.set('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
+      res.set('Access-Control-Allow-Headers', 'Content-Type,X-Auth-Token')
+      res.set('Access-Control-Max-Age', '86400')
+    } else {
+      // 不回显 ACAO（浏览器不可读），非预检请求直接拒绝
+      if (req.method !== 'OPTIONS') {
+        return res.status(403).json({ ok: false, code: 'forbidden', error: '来源不允许' })
+      }
+    }
+  }
+  if (req.method === 'OPTIONS') {
+    return res.get('Access-Control-Allow-Origin') ? res.sendStatus(204) : res.sendStatus(403)
+  }
+  next()
+})
+
+// 简单限流：每 IP 每分钟最多 120 次 API 请求
+const rlMap = new Map()
+app.use('/api', (req, res, next) => {
+  const ip = req.ip || 'x'
+  const now = Date.now()
+  const cur = rlMap.get(ip)
+  if (!cur || now - cur.t0 > 60000) rlMap.set(ip, { t0: now, n: 1 })
+  else {
+    cur.n++
+    if (cur.n > 120) return res.status(429).json({ ok: false, code: 'rate_limited', error: '请求过于频繁，请稍后再试' })
+  }
+  if (rlMap.size > 2000) rlMap.clear()
   next()
 })
 
 // ---- 鉴权：/api 下公开端点除外，本机直连（localhost）免令牌，其余要求 X-Auth-Token ----
 const isLoop = (ip) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
-const PUBLIC_API = ['/config', '/health', '/reachability', '/qr']
+const PUBLIC_API = ['/config', '/health', '/qr']
+function tokenOk(a, b) {
+  const ba = Buffer.from(String(a))
+  const bb = Buffer.from(String(b))
+  if (ba.length !== bb.length) return false
+  return crypto.timingSafeEqual(ba, bb)
+}
 app.use('/api', (req, res, next) => {
   if (!AUTH_TOKEN) return next()
   if (PUBLIC_API.includes(req.path)) return next()
   // 本机直连（在本机浏览器打开）免令牌：设置/二维码流程零输入
   const xff = (req.get('x-forwarded-for') || '').split(',')[0].trim()
   if (isLoop(req.ip) && (!xff || isLoop(xff))) return next()
-  if (req.get('x-auth-token') === AUTH_TOKEN) return next()
+  if (req.get('x-auth-token') && tokenOk(req.get('x-auth-token'), AUTH_TOKEN)) return next()
   return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请在设置中填写 AUTH_TOKEN' })
 })
 
@@ -334,8 +390,13 @@ async function checkMonthlyReport() {
   db.prepare("INSERT INTO meta (k, v) VALUES ('last_report_month', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(key)
 }
 
-// ---- iOS 快捷指令下载（银行短信自动记账） ----
+// ---- iOS 快捷指令下载（银行短信自动记账；文件含令牌 → 仅本机或携带令牌可下载） ----
 app.get('/shortcut', (req, res) => {
+  const xff = (req.get('x-forwarded-for') || '').split(',')[0].trim()
+  const isLocal = isLoop(req.ip) && (!xff || isLoop(xff))
+  if (!isLocal && req.query.t !== AUTH_TOKEN) {
+    return res.status(401).send('需要访问令牌（?t=）')
+  }
   const { lan, tailscale } = scanInterfaces()
   const tsName = env('TAILSCALE_NAME', '').replace(/\/+$/, '')
   const base = tsName ? `https://${tsName}` : tailscale[0] ? `http://${tailscale[0].ip}:${PORT}` : lan[0] ? `http://${lan[0].ip}:${PORT}` : `http://localhost:${PORT}`
@@ -380,10 +441,14 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
 // 已保存的截图（随机文件名即访问凭证；配合 token 鉴权场景外的 <img> 使用）
 app.get('/api/image/:name', (req, res) => {
   const name = String(req.params.name || '').replace(/[^a-zA-Z0-9._-]/g, '')
-  const file = path.join(DATA_DIR, 'images', name)
-  if (!name || !fs.existsSync(file)) return fail(res, 404, 'not_found', '图片不存在')
+  const imageRoot = path.resolve(DATA_DIR, 'images')
+  const resolved = path.resolve(imageRoot, name)
+  // 防路径穿越：解析后必须仍在图片目录内
+  if (!name || !resolved.startsWith(imageRoot + path.sep) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+    return fail(res, 404, 'not_found', '图片不存在')
+  }
   const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp' }[path.extname(name).toLowerCase()] || 'image/jpeg'
-  res.set('Cache-Control', 'private, max-age=31536000').set('Content-Type', mime).send(fs.readFileSync(file))
+  res.set('Cache-Control', 'private, max-age=31536000').set('Content-Type', mime).send(fs.readFileSync(resolved))
 })
 
 // ---- 手动创建（直接确认入账） ----

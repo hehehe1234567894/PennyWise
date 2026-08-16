@@ -31,7 +31,7 @@
     const to = setTimeout(() => ctrl.abort(), 2500)
     const t0 = performance.now()
     try {
-      const r = await fetch(url + '/api/reachability', { signal: ctrl.signal })
+      const r = await fetch(url + '/api/reachability', { signal: ctrl.signal, headers: token ? { 'X-Auth-Token': token } : {} })
       clearTimeout(to)
       if (!r.ok) return null
       const j = await r.json().catch(() => null)
@@ -864,7 +864,7 @@
       <h3>连接手机</h3>
       <p class="hint">用 iPhone 相机扫二维码即可自动配对（令牌免输入），扫完建议"添加到主屏幕"当 App 用。</p>
       <div id="qr-panel" class="conn-panel"></div>
-      <p class="hint">银行短信自动记账（0 点击）：<a class="link" href="/shortcut">下载快捷指令</a> → 导入后到「快捷指令 App → 自动化 → 收到信息」选择发卡银行号码并运行它。</p>
+      <p class="hint">银行短信自动记账（0 点击）：<a class="link" href="/shortcut?t=${encodeURIComponent(token)}">下载快捷指令</a> → 导入后到「快捷指令 App → 自动化 → 收到信息」选择发卡银行号码并运行它。</p>
       <h3>账单导入</h3>
       <p class="hint">每 12 小时自动检查邮箱：只读取白名单发件人（微信/支付宝/银行）的账单邮件并解析入库，其他邮件一律不碰、不上传云端。也可以手动触发。</p>
       <div class="btn-row">
