@@ -526,24 +526,46 @@
   })
 
   function localSummary(all, month) {
-    const confirmed = all.filter((t) => t.status === 'confirmed' && t.amount != null && String(t.ts || '').startsWith(month))
+    const inMonth = all.filter((t) => String(t.ts || '').startsWith(month))
+    const confirmed = inMonth.filter((t) => t.status === 'confirmed' && t.amount != null)
     let expense = 0, income = 0, refund = 0, transfer = 0
     const byCat = {}
+    const byAccount = {}
+    const expenses = []
+    const incomes = []
+    // 每日支出（本月逐日）
+    const [yy, mm] = month.split('-').map(Number)
+    const daysInMonth = new Date(yy, mm, 0).getDate()
+    const days = new Array(daysInMonth).fill(0)
     for (const t of confirmed) {
       const a = Number(t.amount) || 0
-      if (t.direction === 'expense') { expense += a; byCat[t.category || '其他'] = (byCat[t.category || '其他'] || 0) + a }
-      else if (t.direction === 'income') income += a
+      if (t.direction === 'expense') {
+        expense += a
+        byCat[t.category || '其他'] = (byCat[t.category || '其他'] || 0) + a
+        const k = t.account || 'other'
+        byAccount[k] = (byAccount[k] || 0) + a
+        const d = new Date(t.ts).getDate() - 1
+        if (d >= 0 && d < daysInMonth) days[d] += a
+        expenses.push(t)
+      } else if (t.direction === 'income') { income += a; incomes.push(t) }
       else if (t.direction === 'refund') refund += a
       else if (t.direction === 'transfer') transfer += a
     }
     const byCategory = Object.entries(byCat)
       .map(([name, total]) => ({ name, total, n: confirmed.filter((t) => (t.category || '其他') === name && t.direction === 'expense').length }))
       .sort((a, b) => b.total - a.total)
+    const topExpenses = expenses.sort((a, b) => Number(b.amount) - Number(a.amount)).slice(0, 5)
+    const topIncomes = incomes.sort((a, b) => Number(b.amount) - Number(a.amount)).slice(0, 5)
     return {
-      month, expense: Math.round(expense * 100) / 100, income: Math.round(income * 100) / 100,
+      month, income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100,
       refund, transfer, balance: Math.round((income + refund - expense) * 100) / 100,
       count: confirmed.length, byCategory,
       pendingCount: all.filter((t) => t.status === 'pending').length,
+      days: days.map((v) => Math.round(v * 100) / 100),
+      daysInMonth,
+      dailyAvg: Math.round((expense / daysInMonth) * 100) / 100,
+      byAccount: Object.entries(byAccount).map(([k, v]) => ({ k, v: Math.round(v * 100) / 100 })).sort((a, b) => b.v - a.v),
+      topExpenses, topIncomes,
     }
   }
 
@@ -577,6 +599,7 @@
     $('list-summary').innerHTML = `
       <span>收入 <b class="income">+${fmtMoney(s.income)}</b></span>
       <span>支出 <b class="expense">-${fmtMoney(s.expense)}</b></span>
+      <span>日均 <b class="expense">-${fmtMoney(s.dailyAvg)}</b></span>
       <span>结余 <b>${fmtMoney(s.balance)}</b></span>`
   }
 
@@ -623,7 +646,90 @@
     } else {
       $('stats-cats').innerHTML = '<p class="empty">这个月还没有支出</p>'
     }
+    renderStatsExtra(s)
     renderBudget(month)
+  }
+
+  // 信息面板：每日支出 / 账户分布 / 近6月趋势 / TOP 支出收入
+  function renderStatsExtra(s) {
+    // 每日支出柱状图
+    const maxDay = Math.max(...s.days, 1)
+    const todayIdx = new Date().getDate() - 1
+    const dayBars = s.days.map((v, i) => {
+      const h = v > 0 ? Math.max(5, Math.round((v / maxDay) * 100)) : 0
+      const isToday = i === todayIdx
+      return `<div class="day-col">
+        <div class="day-val">${v > 0 ? Math.round(v) : ''}</div>
+        <div class="day-bar${isToday ? ' today' : ''}" style="height:${h}%"></div>
+        <div class="day-lbl">${(i + 1) % 5 === 1 || i + 1 === s.daysInMonth ? i + 1 : ''}</div>
+      </div>`
+    }).join('')
+    // 账户分布
+    const acctColors = { wechat: '#22c55e', alipay: '#4f8cff', bank: '#f59e0b', cash: '#84cc16', other: '#64748b' }
+    const acctTotal = s.byAccount.reduce((a, b) => a + b.v, 0) || 1
+    const acctBar = `<div class="acct-bar">${s.byAccount.map((e) => `<div style="width:${(e.v / acctTotal) * 100}%;background:${acctColors[e.k] || '#4f8cff'}"></div>`).join('')}</div>`
+    const acctRows = s.byAccount.map((e) => `
+      <div class="acct-row">
+        <span class="dot" style="background:${acctColors[e.k] || '#4f8cff'}"></span>
+        <span>${esc(ACC_LABEL[e.k] || e.k)}</span>
+        <span class="acct-amt">${fmtMoney(e.v)} · ${Math.round((e.v / acctTotal) * 100)}%</span>
+      </div>`).join('')
+    // 近 6 个月趋势
+    const [yy, mm] = (s.month || localMonth()).split('-').map(Number)
+    const trend = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(yy, mm - 1 - i, 1)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      trend.push({ key, label: `${d.getMonth() + 1}月` })
+    }
+    // 从本地镜像计算每月支出
+    Promise.resolve().then(async () => {
+      const all = await mAll('tx').catch(() => [])
+      const totals = trend.map((t) => ({
+        ...t,
+        total: all.filter((x) => x.status === 'confirmed' && x.direction === 'expense' && x.amount != null && String(x.ts || '').startsWith(t.key)).reduce((a, x) => a + Number(x.amount), 0),
+      }))
+      const maxT = Math.max(...totals.map((t) => t.total), 1)
+      $('trend-chart').innerHTML = totals.map((t) => {
+        const h = t.total > 0 ? Math.max(5, Math.round((t.total / maxT) * 100)) : 0
+        const cur = t.key === s.month
+        return `<div class="day-col">
+          <div class="day-val">${t.total > 0 ? Math.round(t.total) : ''}</div>
+          <div class="day-bar${cur ? ' today' : ''}" style="height:${h}%"></div>
+          <div class="day-lbl">${t.label}</div>
+        </div>`
+      }).join('')
+    })
+    // TOP 支出 / 收入
+    const topExp = (s.topExpenses || []).map((t, i) => `
+      <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.goods_name ? ' · ' + esc(t.goods_name) : ''}</span><b class="expense">-${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
+    const topInc = (s.topIncomes || []).map((t, i) => `
+      <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.note ? ' · ' + esc(t.note) : ''}</span><b class="income">+${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
+    $('stats-extra').innerHTML = `
+      <div class="stat-block">
+        <div class="stat-block-title">📅 每日支出（本月）· 日均 ${fmtMoney(s.dailyAvg)}</div>
+        <div class="day-chart">${dayBars}</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-block">
+          <div class="stat-block-title">💳 账户分布（支出）</div>
+          ${s.byAccount.length ? acctBar + acctRows : '<p class="empty">暂无数据</p>'}
+        </div>
+        <div class="stat-block">
+          <div class="stat-block-title">📈 近 6 个月支出</div>
+          <div class="day-chart" id="trend-chart"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-block">
+          <div class="stat-block-title">🔥 最大支出 TOP5</div>
+          ${topExp}
+        </div>
+        <div class="stat-block">
+          <div class="stat-block-title">💚 最大收入 TOP5</div>
+          ${topInc}
+        </div>
+      </div>`
   }
 
   // ---------- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----------

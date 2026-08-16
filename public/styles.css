@@ -225,6 +225,25 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .cat-bar { height: 100%; border-radius: 6px; transition: width .4s ease; }
 .cat-amt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
+/* 信息面板（每日支出/账户分布/趋势/TOP） */
+.stat-block { background: var(--card2); border: 1px solid var(--border); border-radius: 13px; padding: 13px; margin-bottom: 11px; animation: fadeUp .3s ease both; }
+.stat-block-title { font-size: 12px; color: var(--dim); margin-bottom: 10px; font-weight: 600; letter-spacing: .2px; }
+.stat-row { display: grid; gap: 11px; }
+.day-chart { display: flex; align-items: flex-end; gap: 2px; height: 104px; padding-top: 2px; }
+.day-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.day-bar { width: 100%; max-width: 14px; background: #2b3a5e; border-radius: 2px 2px 0 0; transition: height .35s ease; min-height: 0; }
+.day-bar.today { background: linear-gradient(180deg, #4f8cff, #7c5cff); box-shadow: 0 0 8px rgba(79,140,255,.5); }
+.day-val { font-size: 9px; color: var(--dim); margin-bottom: 2px; white-space: nowrap; }
+.day-lbl { font-size: 9px; color: var(--dim); margin-top: 3px; }
+.acct-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; margin-bottom: 10px; background: var(--bg); border: 1px solid var(--border); }
+.acct-row { display: grid; grid-template-columns: 12px 1fr 130px; gap: 8px; align-items: center; font-size: 12.5px; margin-bottom: 6px; }
+.acct-amt { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+.top-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.top-row:last-child { border-bottom: none; }
+.top-rank { color: var(--dim); width: 18px; flex: none; }
+.top-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.top-row b { flex: none; font-variant-numeric: tabular-nums; }
+
 /* ---------- 弹窗 ---------- */
 .modal {
   position: fixed; inset: 0; background: rgba(4,6,10,.68); backdrop-filter: blur(6px); z-index: 60;
@@ -323,6 +342,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   }
   .desktop section h2, .desktop section h3 { margin-top: 0; }
   .stats-cards { grid-template-columns: repeat(4, 1fr); }
+  .stat-row { grid-template-columns: 1fr 1fr; }
   #list-items { max-height: calc(100vh - 230px); overflow-y: auto; padding-right: 5px; }
   .row-card { cursor: pointer; }
 }
