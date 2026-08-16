@@ -171,8 +171,8 @@
     currentEditor = null
   }
 
-  // ---------- 响应式：手机单页 / 电脑仪表盘 ----------
-  const mqDesktop = window.matchMedia('(min-width: 960px)')
+  // ---------- 响应式：手机单页竖排 / 电脑田字仪表盘（细指针才算电脑） ----------
+  const mqDesktop = window.matchMedia('(min-width: 960px) and (pointer: fine)')
   let isDesktop = mqDesktop.matches
   function applyLayout() {
     isDesktop = mqDesktop.matches
