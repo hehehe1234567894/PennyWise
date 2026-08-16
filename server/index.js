@@ -9,6 +9,7 @@ import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } 
 import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv, parseBankCsv } from './importer.js'
 import { pollMailCapture } from './mailin.js'
 import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
+import { analyzeBillForAlternatives } from './recommend.js'
 import { shortcutFile } from './shortcut.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
@@ -272,7 +273,8 @@ app.get('/api/report/preview', async (req, res) => {
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
   const s = summarizeMonth(month)
   const narrative = await generateReportNarrative(s)
-  res.json({ ok: true, data: { text: buildReportText(s, narrative), narrative, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
+  const alts = await analyzeBillForAlternatives(month)
+  res.json({ ok: true, data: { text: buildReportText(s, narrative, alts), narrative, alts, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
 })
 
 app.post('/api/report', async (req, res) => {

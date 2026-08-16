@@ -1,6 +1,7 @@
 import { db } from './db.js'
 import { env } from './env.js'
 import { llmConfig } from './llm.js'
+import { analyzeBillForAlternatives } from './recommend.js'
 import nodemailer from 'nodemailer'
 
 // ================= 月度报告（邮箱 / Server酱微信推送） =================
@@ -106,7 +107,7 @@ export async function generateReportNarrative(s) {
 
 const BILL_REMINDER = '微信/支付宝账单已超过 35 天未导入。支付宝可在 App 里开启"每月自动发送账单到邮箱"（设置一次永久自动）；微信账单请每月在 微信 → 我 → 服务 → 钱包 → 账单 → 下载账单 手动发送到邮箱（发送后自动入库，无需其他操作）。'
 
-export function buildReportText(s, narrative = '') {
+export function buildReportText(s, narrative = '', alts = []) {
   const lines = []
   lines.push(`PennyWise 月度报告 · ${monthLabel(s.month)}`)
   lines.push('━━━━━━━━━━━━━━━━')
@@ -120,6 +121,14 @@ export function buildReportText(s, narrative = '') {
     lines.push('')
     lines.push('📝 AI 分析')
     lines.push(narrative)
+  }
+  if (alts.length) {
+    lines.push('')
+    lines.push('🛒 平替推荐（根据你的账单）')
+    alts.forEach((a, i) => {
+      lines.push(`${i + 1}. ${a.product}${a.reason ? '（' + a.reason + '）' : ''}`)
+      lines.push(a.recommendation)
+    })
   }
   lines.push('')
   if (s.byCategory.length) {
@@ -145,7 +154,7 @@ export function buildReportText(s, narrative = '') {
   return lines.join('\n')
 }
 
-export function buildReportHtml(s, narrative = '') {
+export function buildReportHtml(s, narrative = '', alts = []) {
   const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const catRows = s.byCategory.slice(0, 6).map((c) => `<tr><td>${esc(c.name)}</td><td>${money(-c.total)}</td><td>${c.n} 笔</td></tr>`).join('')
   const topRows = s.topExpenses.map((t) => `<tr><td>${money(-t.amount)}</td><td>${esc(t.merchant || '')}${t.goods_name ? '（' + esc(t.goods_name) + '）' : ''}</td><td>${esc(t.category || '')}</td></tr>`).join('')
@@ -156,6 +165,9 @@ export function buildReportHtml(s, narrative = '') {
     : ''
   const aiSection = narrative
     ? `<div style="background:#12231a;border:1px solid #22c55e55;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#22c55e;font-size:12px;font-weight:700;margin-bottom:6px">📝 AI 分析</div><div style="font-size:14px;line-height:1.7">${esc(narrative).replace(/\n/g, '<br>')}</div></div>`
+    : ''
+  const altSection = alts.length
+    ? `<div style="background:#1a1626;border:1px solid #a855f755;border-radius:8px;padding:12px 14px;margin:12px 0"><div style="color:#c084fc;font-size:12px;font-weight:700;margin-bottom:8px">🛒 平替推荐（根据你的账单）</div>${alts.map((a) => `<div style="margin-bottom:10px;font-size:14px"><b>${esc(a.product)}</b>${a.reason ? ` <span style="color:#8b93a5;font-size:12px">（${esc(a.reason)}）</span>` : ''}<div style="line-height:1.7;margin-top:2px">${esc(a.recommendation).replace(/\n/g, '<br>')}</div></div>`).join('')}</div>`
     : ''
   return `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#0f1115;color:#e8eaf0;padding:24px">
@@ -169,6 +181,7 @@ export function buildReportHtml(s, narrative = '') {
 ${diff}
 ${reminder}
 ${aiSection}
+${altSection}
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">支出分类</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">${catRows || '<tr><td>本月暂无支出</td></tr>'}</table>
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">最大支出</h3>
@@ -214,15 +227,16 @@ export async function sendServerChan(title, text) {
   }
 }
 
-// 发送某月报告到所有已配置渠道（LLM 撰写分析，失败自动回退模板）
+// 发送某月报告到所有已配置渠道（LLM 撰写分析 + 账单驱动的平替推荐，失败自动回退模板）
 export async function sendMonthlyReport(month) {
   const s = summarizeMonth(month)
   const narrative = await generateReportNarrative(s)
+  const alts = await analyzeBillForAlternatives(month)
   const title = `PennyWise 月报 · ${monthLabel(month)}`
   const channels = []
-  const email = await sendEmail(title, buildReportHtml(s, narrative))
+  const email = await sendEmail(title, buildReportHtml(s, narrative, alts))
   channels.push({ name: 'email', ...email })
-  const chan = await sendServerChan(title, buildReportText(s, narrative))
+  const chan = await sendServerChan(title, buildReportText(s, narrative, alts))
   channels.push({ name: 'serverchan', ...chan })
   return { summary: s, channels, sent: channels.filter((c) => c.ok).length }
 }
