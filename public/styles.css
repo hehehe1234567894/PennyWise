@@ -45,6 +45,12 @@ main section[hidden] { display: none !important; }
 .refund { color: var(--blue); }
 .transfer { color: var(--dim); }
 .warn-text { color: #fbbf24; }
+.js-error {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+  background: rgba(239,68,68,.92); color: #fff;
+  padding: 10px 16px; font-size: 13px; line-height: 1.5;
+  text-align: center;
+}
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4a6b; }

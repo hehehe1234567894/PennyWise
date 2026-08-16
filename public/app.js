@@ -2,7 +2,18 @@
 (() => {
   'use strict'
 
-  const $ = (id) => document.getElementById(id)
+  // 兜底：任何脚本错误直接显示在页面上，避免"点了没反应"的静默失败
+  window.addEventListener('error', (e) => {
+    try {
+      const el = document.getElementById('js-error')
+      if (el) {
+        el.textContent = '页面脚本出错：' + (e.message || '未知错误')
+        el.classList.remove('hidden')
+      }
+    } catch { /* 忽略 */ }
+  })
+
+  const $ = (sel) => /^[#.[]/.test(sel) ? document.querySelector(sel) : document.getElementById(sel)
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
   const fmtMoney = (n) => (n === null || n === undefined) ? '—' : '¥' + Number(n).toFixed(2)
   const DIR_LABEL = { expense: '支出', income: '收入', refund: '退款', transfer: '转账' }
