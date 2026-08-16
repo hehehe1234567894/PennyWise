@@ -274,7 +274,7 @@ app.get('/api/report/preview', async (req, res) => {
   const s = summarizeMonth(month)
   const narrative = await generateReportNarrative(s)
   const alts = await analyzeBillForAlternatives(month)
-  res.json({ ok: true, data: { text: buildReportText(s, narrative, alts), narrative, alts, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
+  res.json({ ok: true, data: { text: buildReportText(s, narrative, alts), html: buildReportHtml(s, narrative, alts), narrative, alts, channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
 })
 
 app.post('/api/report', async (req, res) => {

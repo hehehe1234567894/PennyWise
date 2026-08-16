@@ -161,9 +161,54 @@ export function buildReportText(s, narrative = '', alts = []) {
   return lines.join('\n')
 }
 
+// 近 N 个月支出趋势（月报柱状图数据）
+export function monthlyTrend(month, n = 6) {
+  const [y, m] = String(month).split('-').map(Number)
+  const out = []
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(y, m - 1 - i, 1))
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+    const expense = Number(db.prepare("SELECT SUM(amount) AS s FROM transactions WHERE ts LIKE ? AND status = 'confirmed' AND amount IS NOT NULL AND direction = 'expense'").get(key + '%')?.s ?? 0)
+    out.push({ key, label: `${d.getUTCMonth() + 1}月`, expense: Math.round(expense * 100) / 100, isCurrent: key === month })
+  }
+  return out
+}
+
+const BAR_COLORS = ['#4f8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#84cc16']
+
+// 纯 CSS 水平条形图（邮件客户端不支持 JS，图表用 div 绘制）
+function categoryBarsHtml(s) {
+  const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const max = s.byCategory[0]?.total || 1
+  return s.byCategory.slice(0, 8).map((c, i) => {
+    const pct = Math.max(4, Math.round((c.total / max) * 100))
+    return `<div style="display:flex;align-items:center;margin:7px 0;font-size:12px">
+      <div style="width:66px;color:#8b93a5;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:none">${esc(c.name)}</div>
+      <div style="flex:1;background:#1e222b;border-radius:4px;height:14px;overflow:hidden">
+        <div style="width:${pct}%;height:14px;background:${BAR_COLORS[i % BAR_COLORS.length]};border-radius:4px"></div>
+      </div>
+      <div style="width:86px;text-align:right;color:#e8eaf0;flex:none;font-variant-numeric:tabular-nums">${money(-c.total)} <span style="color:#8b93a5;font-size:10px">${c.n}笔</span></div>
+    </div>`
+  }).join('')
+}
+
+// 纯 CSS 垂直柱状图（近 6 个月支出趋势）
+function trendBarsHtml(months) {
+  const max = Math.max(...months.map((m) => m.expense), 1)
+  return `<div style="display:flex;align-items:flex-end;gap:8px;height:130px;padding:10px 4px 0">
+    ${months.map((m) => {
+      const h = Math.max(5, Math.round((m.expense / max) * 88))
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0">
+        <div style="font-size:10px;color:#8b93a5;margin-bottom:2px;white-space:nowrap">${m.expense > 0 ? Math.round(m.expense) : ''}</div>
+        <div style="width:62%;max-width:36px;background:${m.isCurrent ? '#4f8cff' : '#26344f'};border-radius:4px 4px 0 0;height:${h}%"></div>
+        <div style="font-size:10px;color:${m.isCurrent ? '#4f8cff' : '#8b93a5'};margin-top:4px;font-weight:${m.isCurrent ? '700' : '400'}">${m.label}</div>
+      </div>`
+    }).join('')}
+  </div>`
+}
+
 export function buildReportHtml(s, narrative = '', alts = []) {
   const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
-  const catRows = s.byCategory.slice(0, 6).map((c) => `<tr><td>${esc(c.name)}</td><td>${money(-c.total)}</td><td>${c.n} 笔</td></tr>`).join('')
   const topRows = s.topExpenses.map((t) => `<tr><td>${money(-t.amount)}</td><td>${esc(t.merchant || '')}${t.goods_name ? '（' + esc(t.goods_name) + '）' : ''}</td><td>${esc(t.category || '')}</td></tr>`).join('')
   const incRows = s.incomes.map((t) => `<tr><td>${money(t.amount)}</td><td>${esc(t.merchant || '')}${t.note ? '（' + esc(t.note) + '）' : ''}</td></tr>`).join('')
   const diff = s.diffPct !== null ? `<p>支出环比：<b>${s.diffPct > 0 ? '↑' : '↓'}${Math.abs(s.diffPct)}%</b>（上月 ${money(-s.prevExpense)}）</p>` : ''
@@ -189,8 +234,10 @@ ${diff}
 ${reminder}
 ${aiSection}
 ${altSection}
-<h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">支出分类</h3>
-<table style="width:100%;border-collapse:collapse;font-size:13px">${catRows || '<tr><td>本月暂无支出</td></tr>'}</table>
+<h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">📊 支出分类</h3>
+${categoryBarsHtml(s)}
+<h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">📈 近 6 个月支出趋势</h3>
+${trendBarsHtml(monthlyTrend(s.month))}
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">最大支出</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">${topRows || '<tr><td>无</td></tr>'}</table>
 <h3 style="font-size:14px;color:#8b93a5;margin:16px 0 8px">收入明细</h3>
