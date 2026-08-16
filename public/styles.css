@@ -101,6 +101,8 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 @keyframes fadeUp { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 .empty { color: var(--dim); text-align: center; padding: 26px 0; font-size: 14px; }
 .hidden { display: none !important; }
+/* 被隐藏的板块必须真正消失（防止桌面布局的 display:flex 覆盖 hidden 属性） */
+main section[hidden] { display: none !important; }
 .expense { color: var(--red); }
 .income { color: var(--green); }
 .refund { color: var(--blue); }

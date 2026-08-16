@@ -106,7 +106,7 @@ export async function agentChat(text, threshold) {
       return { kind: 'record_fail', reply: route.reply || '没能从内容里确认金额，请补充金额后再发一次。' }
     }
     const { status } = insertFieldsTx(fields, q, null, 'chat', threshold)
-    const tail = status === 'confirmed' ? '已自动入账 ✓' : '已记入待处理'
+    const tail = status === 'confirmed' ? '已自动入账 ✓' : '已记入流水（点开这条可修改）'
     return { kind: 'record', reply: `${route.reply || '已记账'}（${tail}）` }
   }
   if (route.intent === 'recommend') {

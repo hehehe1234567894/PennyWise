@@ -647,7 +647,7 @@
       <div class="stat-card"><div class="stat-num income" data-cnt="${s.income}" data-sign="+" data-dec="2">+${fmtMoney(s.income)}</div><div class="stat-label">收入</div></div>
       <div class="stat-card"><div class="stat-num expense" data-cnt="${s.expense}" data-sign="-" data-dec="2">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
       <div class="stat-card"><div class="stat-num" data-cnt="${Math.abs(s.balance)}" data-sign="${s.balance < 0 ? '-' : '+'}" data-dec="2">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
-      <div class="stat-card"><div class="stat-num" data-cnt="${s.pendingCount}" data-sign="" data-dec="0">${s.pendingCount}</div><div class="stat-label">待处理</div></div>`
+      <div class="stat-card"><div class="stat-num" data-cnt="${s.count}" data-sign="" data-dec="0">${s.count}</div><div class="stat-label">笔数</div></div>`
     requestAnimationFrame(runCountUps)
     renderStatsExtra(s)
     renderBudget(month)

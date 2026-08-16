@@ -95,7 +95,7 @@ export async function generateReportNarrative(s) {
     支出分类: (s.byCategory || []).slice(0, 6).map((c) => `${c.name} ${c.total}(${c.n}笔)`),
     最大支出: (s.topExpenses || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
     收入明细: (s.incomes || []).slice(0, 3).map((t) => `${t.merchant} ${t.amount}`),
-    上月支出: s.prevExpense, 环比: s.diffPct, 待处理: s.pendingCount,
+    上月支出: s.prevExpense, 环比: s.diffPct, 未确认: s.pendingCount,
     预算执行: (s.budgets || []).map((b) => `${b.category} ${b.spent}/${b.limit}${b.spent > b.limit ? '超支' : ''}`),
   })
   const sys = '你是个人财务分析助手。根据给出的月度数据写一段 120-200 字的简体中文分析：①本月亮点与问题；②最值得关注的一两处（最大支出、异常分类、环比变化）；③一条切实可行的建议。语气亲切专业，不重复罗列全部数据。'
@@ -127,7 +127,7 @@ export function buildReportText(s, narrative = '', alts = []) {
   if (s.refund > 0) lines.push(`退款    ${money(s.refund)}`)
   lines.push(`结余    ${money(s.balance)}`)
   if (s.diffPct !== null) lines.push(`支出环比  ${s.diffPct > 0 ? '↑' : '↓'}${Math.abs(s.diffPct)}%（上月 ${money(-s.prevExpense)}）`)
-  if (s.pendingCount > 0) lines.push(`待处理  ${s.pendingCount} 条`)
+  if (s.pendingCount > 0) lines.push(`未确认  ${s.pendingCount} 条`)
   if (narrative) {
     lines.push('')
     lines.push('📝 AI 分析')
@@ -275,7 +275,7 @@ ${trendBarsHtml(monthlyTrend(s.month))}
 <table style="width:100%;border-collapse:collapse;font-size:13px">${topRows || '<tr><td>无</td></tr>'}</table>
 <h3 style="font-size:14px;color:#374151;margin:16px 0 8px">收入明细</h3>
 <table style="width:100%;border-collapse:collapse;font-size:13px">${incRows || '<tr><td>无</td></tr>'}</table>
-<p style="color:#6b7280;font-size:12px;margin-top:20px">—— PennyWise 自动生成 · 共 ${s.count} 笔确认记录${s.pendingCount ? ' · 待处理 ' + s.pendingCount + ' 条' : ''}</p>
+<p style="color:#6b7280;font-size:12px;margin-top:20px">—— PennyWise 自动生成 · 共 ${s.count} 笔确认记录${s.pendingCount ? ' · 未确认 ' + s.pendingCount + ' 条' : ''}</p>
 </div></body></html>`
 }
 
