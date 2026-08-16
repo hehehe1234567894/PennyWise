@@ -1294,6 +1294,18 @@
       // 仅用于"分享入账"接收；页面不再缓存，也绝不自动刷新（自动刷新曾造成莫名重载）
       navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {})
     }
+    // 实时事件：后台收到月度账单邮件并处理完数据 → 刷新账本；其他邮件不刷新
+    if (token && typeof EventSource !== 'undefined') {
+      try {
+        const es = new EventSource('/api/events?t=' + encodeURIComponent(token))
+        es.addEventListener('bills', (e) => {
+          let n = ''
+          try { n = String(JSON.parse(e.data || '{}').imported || '') } catch { /* 忽略 */ }
+          toast(n ? `📥 月度账单已导入 ${n} 笔，账本已更新` : '📥 月度账单已导入，账本已更新')
+          syncNow()
+        })
+      } catch { /* 不支持事件流时依赖 30 秒同步轮询 */ }
+    }
   }
 
   // ---------- 初始化 ----------

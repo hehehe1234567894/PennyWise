@@ -2,6 +2,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import express from 'express'
 import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
@@ -99,7 +100,7 @@ app.use('/api', (req, res, next) => {
 })
 
 // ---- 鉴权：/api 下公开端点除外，其余一律要求 X-Auth-Token（本机/远程一视同仁，无验证不可进入） ----
-const PUBLIC_API = ['/qr']
+const PUBLIC_API = ['/qr', '/events']
 function tokenOk(a, b) {
   const ba = Buffer.from(String(a))
   const bb = Buffer.from(String(b))
@@ -268,6 +269,7 @@ app.post('/api/agent', async (req, res) => {
 })
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----
+const liveEvents = new EventEmitter()
 const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, merged: 0, reviewedPairs: 0, categorized: 0, passwords: 0, error: '' }
 async function runBillImport() {
   billStatus.enabled = mailConfig().billsEnabled
@@ -284,6 +286,8 @@ async function runBillImport() {
     // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）
     if (!r.error && r.files > 0) {
       db.prepare("INSERT INTO meta (k, v) VALUES ('last_bill_import', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(nowIso())
+      // 通知已打开的网页：月度账单处理完成，刷新账本
+      liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files })
     }
     return r
   } catch (e) {
@@ -304,6 +308,22 @@ app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb'
   else parsed = parseWechatCsv(req.body.toString('utf8'))
   if (parsed.error) return fail(res, 400, 'parse_error', parsed.error)
   res.json({ ok: true, data: await importBillRows(parsed.rows) })
+})
+
+// ---- 实时事件流：月度账单处理完成后推送事件，网页据此刷新账本（其他邮件不推送） ----
+// EventSource 无法带自定义请求头，令牌走查询参数 ?t=（与 /shortcut 一致）
+app.get('/api/events', (req, res) => {
+  if (!AUTH_TOKEN || !req.query.t || !tokenOk(String(req.query.t), AUTH_TOKEN)) {
+    return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效' })
+  }
+  res.set('Content-Type', 'text/event-stream')
+  res.set('Cache-Control', 'no-store')
+  res.set('Connection', 'keep-alive')
+  res.write('retry: 15000\n\n')
+  const onBills = (d) => { try { res.write(`event: bills\ndata: ${JSON.stringify(d)}\n\n`) } catch { /* 连接已断 */ } }
+  liveEvents.on('bills', onBills)
+  const hb = setInterval(() => { try { res.write(': hb\n\n') } catch { /* 忽略 */ } }, 25000)
+  req.on('close', () => { clearInterval(hb); liveEvents.off('bills', onBills) })
 })
 
 // ---- 邮箱沟通 AI Agent（只读"自己发的、主题为 PW"的邮件，自动处理并回信） ----
