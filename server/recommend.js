@@ -43,15 +43,17 @@ export async function recommendAlternatives(query) {
   }
 }
 
-// 判断是否有比"用户现价"更便宜的方案（结论先行，结构化输出）
-export async function findCheaperOption({ product, currentPrice, reason }) {
+// 分析用户在用产品的两个方向：① 更便宜的方案；② 更好的升级产品（结构化输出，一次联网搜索）
+export async function analyzeProductOptions({ product, currentPrice, reason }) {
   const base = env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, '')
   const key = env('VISION_API_KEY')
   const model = env('RECOMMEND_MODEL', 'qwen-plus')
-  if (!key) return { cheaper: false, text: '' }
-  const sys = `你是省钱助手。用户目前在用「${product}」，价格为 ${currentPrice} 元。请联网搜索该商品/服务的当前市场价格、官方优惠与替代渠道（学生价、拼车、年付折扣、同类更便宜替代品）。
-只推荐比用户现价 ${currentPrice} 元更低的方案；如果找不到更便宜的，结论为 false 并简述"当前已是较优价格"的理由。
-只输出一个 JSON 对象：{"cheaper":true或false,"text":"给用户的话（Markdown，250字以内，结论先行；cheaper=true 时列方案：名称、价格、比现价省多少、关键取舍；cheaper=false 时说明当前已较优的理由）"}`
+  if (!key) return { cheaper: false, cheaperText: '', better: false, betterText: '' }
+  const sys = `你是消费顾问。用户目前在用「${product}」，价格为 ${currentPrice} 元。请联网搜索该商品/服务的市场情况，给出两个独立判断：
+1. cheaper：有没有【比用户现价 ${currentPrice} 元更低】的方案（官方优惠、拼车、学生价、年付折扣、同类更便宜替代品）。没有则 cheaper=false。
+2. better：有没有【比用户现在用的更好、值得升级】的产品（体验/效果/口碑明显更好，价格可以更高但要说清值不值得）。没有则 better=false。
+只输出一个 JSON 对象：{"cheaper":true或false,"cheaper_text":"cheaper=true 时：Markdown 列表（名称、价格、比现价省多少、关键取舍）；false 时填\"\"","better":true或false,"better_text":"better=true 时：Markdown 列表（名称、价格、比现价贵多少或持平、好在哪、是否值得升级）；false 时填\"\""}
+要求：结论先行、真实价格、共 350 字以内。`
   try {
     const res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
@@ -67,17 +69,22 @@ export async function findCheaperOption({ product, currentPrice, reason }) {
       }),
       signal: AbortSignal.timeout(90000),
     })
-    if (!res.ok) return { cheaper: false, text: '' }
+    if (!res.ok) return { cheaper: false, cheaperText: '', better: false, betterText: '' }
     const j = await res.json()
     const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
     try {
       const d = JSON.parse(content)
-      return { cheaper: d.cheaper === true, text: String(d.text || '').slice(0, 800) }
+      return {
+        cheaper: d.cheaper === true,
+        cheaperText: String(d.cheaper_text || '').slice(0, 600),
+        better: d.better === true,
+        betterText: String(d.better_text || '').slice(0, 600),
+      }
     } catch {
-      return { cheaper: true, text: content.slice(0, 800) } // JSON 失败时按普通文本处理
+      return { cheaper: true, cheaperText: content.slice(0, 600), better: false, betterText: '' }
     }
   } catch {
-    return { cheaper: false, text: '' }
+    return { cheaper: false, cheaperText: '', better: false, betterText: '' }
   }
 }
 
@@ -141,15 +148,15 @@ export async function analyzeBillForAlternatives(month) {
   for (const it of items) {
     if (!it.product || !it.search) continue
     const price = Number(it.current_price)
-    // 核心判断：是否有比用户现价更便宜的方案，只有 cheaper=true 才推送
-    const r = await findCheaperOption({ product: String(it.product).slice(0, 60), currentPrice: Number.isFinite(price) ? price : 0, reason: String(it.reason || '').slice(0, 120) })
-    if (r.cheaper && r.text) {
-      out.push({
-        product: String(it.product).slice(0, 60),
-        reason: `现价 ¥${Number.isFinite(price) ? price : '?'}${it.reason ? '，' + String(it.reason).slice(0, 100) : ''}`,
-        recommendation: r.text,
-      })
-    }
+    // 两个方向：更便宜的方案 + 更好的升级产品
+    const r = await analyzeProductOptions({ product: String(it.product).slice(0, 60), currentPrice: Number.isFinite(price) ? price : 0, reason: String(it.reason || '').slice(0, 120) })
+    if (!r.cheaperText && !r.betterText) continue
+    out.push({
+      product: String(it.product).slice(0, 60),
+      reason: `现价 ¥${Number.isFinite(price) ? price : '?'}${it.reason ? '，' + String(it.reason).slice(0, 100) : ''}`,
+      cheaperText: r.cheaperText,
+      betterText: r.betterText,
+    })
   }
   if (out.length) saveLastAltRecommend(month, out.map((x) => x.product))
   return out
