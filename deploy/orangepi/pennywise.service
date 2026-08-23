@@ -1,0 +1,25 @@
+[Unit]
+Description=PennyWise 零手动记账服务器
+Documentation=deploy/orangepi/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pennywise
+Group=pennywise
+WorkingDirectory=/opt/pennywise
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+
+# 可选安全收紧（账本 data/ 与 .env 都在 /opt/pennywise 下，不受影响；个人设备可按需删减）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
