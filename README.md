@@ -128,6 +128,16 @@ qwen3-vl-flash → qwen3.7-flash → qwen3.5-flash → qwen-vl-plus
 
 DeepSeek 解析一条交易约 ¥0.001，截图一张约 ¥0.01–0.05，几百笔/月成本几毛到几块钱。
 
+## 24/7 常驻（Orange Pi Zero 3，可选）
+
+不满足于「电脑开机才自动」？把服务端整个搬到一块 **Orange Pi Zero 3（约 2–3W 功耗）** 上，账单导入 / 月报 / 邮箱 Agent / 跨端同步就 7×24 在线，电脑随便关。服务器代码零改动、跨平台（Node 内置 SQLite + 全纯 JS 依赖）。
+
+部署脚本、账本迁移与 Tailscale 见 [deploy/orangepi/README.md](deploy/orangepi/README.md)，一键命令：
+
+```bash
+sudo bash deploy/orangepi/setup.sh
+```
+
 ## 测试
 
 ```powershell
