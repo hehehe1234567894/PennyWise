@@ -86,7 +86,7 @@ const dynamic = new Set(['ed-direction', 'ed-cat-wrap', 'ed-category', 'ed-amoun
   'set-status', 'set-llm-save', 'set-llm', 'set-llm-status', 'set-autoconfirm', 'set-auto-status', 'set-reprobe',
   'conn-panel', 'set-import', 'set-import-status', 'set-report', 'set-report-status', 'qr-panel', 'ed-img',
   'rec-block', 'rec-refresh', 'merchant-block', 'm-rows', 'm-more', 'day-chart', 'day-tip', 'bg-fx',
-  'btn-audit', 'audit-month', 'audit-status', 'audit-download'])
+  'btn-audit', 'audit-month', 'audit-status', 'audit-download', 'fin-block'])
 const missing = [...new Set(refs)].filter((r) => !htmlIds.has(r) && !dynamic.has(r))
 if (missing.length) {
   failed = true
