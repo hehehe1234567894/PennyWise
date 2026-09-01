@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -12,10 +12,30 @@
 </head>
 <body>
   <div id="js-error" class="js-error hidden"></div>
+
+  <!-- 电脑端左侧导航栏（手机端隐藏，用底部标签） -->
+  <aside id="sidebar" class="sidebar">
+    <div class="side-logo">
+      <span class="logo-mark">💰</span>
+      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v40</span></div>
+    </div>
+    <nav class="side-nav">
+      <button class="side-item active" data-tab="list"><span class="side-ico">📄</span><span>流水</span></button>
+      <button class="side-item" data-tab="stats"><span class="side-ico">📊</span><span>统计</span></button>
+      <button class="side-item" data-tab="mail"><span class="side-ico">📬</span><span>邮箱账单</span><span class="mail-dot hidden"></span></button>
+      <button class="side-item" id="side-chat"><span class="side-ico">🤖</span><span>AI 助手</span></button>
+    </nav>
+    <div class="side-foot">
+      <button class="side-item" id="side-settings"><span class="side-ico">⚙</span><span>设置</span></button>
+      <span id="side-net" class="chip chip-ok hidden">在线</span>
+    </div>
+  </aside>
+
   <header class="topbar">
-    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v33</span></div>
+    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v40</span></div>
     <div class="topbar-right">
       <span id="net-chip" class="chip chip-ok hidden">在线</span>
+      <button id="btn-mail" class="icon-btn mail-btn" title="邮箱动态">📬<span id="mail-dot" class="mail-dot hidden"></span></button>
       <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
     </div>
   </header>
@@ -54,9 +74,25 @@
         </div>
         <div class="btn-row">
           <button id="bud-save" class="btn btn-primary">保存预算</button>
+          <button id="bud-auto" class="btn">⚡ 按本月实际一键生成</button>
         </div>
         <div id="budget-list"></div>
       </div>
+    </section>
+
+    <!-- 邮箱账单：自动导入的动态与状态 -->
+    <section id="tab-mail" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">📬 邮箱账单</h2>
+        <div class="panel-tools">
+          <button id="mail-check" class="btn btn-small">立即导入</button>
+        </div>
+      </div>
+      <div id="mail-status-chips" class="mail-chips"></div>
+      <p class="hint">账单邮件（微信/支付宝/银行）每 12 小时自动导入入库；有新动态时顶栏 📬 图标会亮红点，点一下就能跳到这里看。</p>
+      <h3>处理动态</h3>
+      <div id="mail-feed" class="mail-feed"></div>
+      <p id="mail-feed-empty" class="empty hidden">还没有处理记录。把账单邮件发到你的 163 邮箱就会自动导入。</p>
     </section>
 
     <!-- 以下两个板块已停用（隐藏保留，数据流不受影响） -->
@@ -86,6 +122,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="list"><span class="tab-ico">📄</span><span>流水</span></button>
     <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
+    <button class="tab" data-tab="mail"><span class="tab-ico">📬</span><span>邮箱</span></button>
   </nav>
 
   <button id="btn-chat" class="chat-fab" title="AI 助手">🤖</button>

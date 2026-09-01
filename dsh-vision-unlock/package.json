@@ -1,0 +1,21 @@
+{
+  "name": "@local/dsh-vision-unlock",
+  "version": "1.0.0",
+  "description": "模型图片输入能力覆盖插件 for deepseek-harness (dsh)：把被元数据标成纯文本的多模态模型（如 glm-5.3-flash）解锁图片输入",
+  "type": "module",
+  "main": "./dist/index.js",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "vision",
+    "image-input"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

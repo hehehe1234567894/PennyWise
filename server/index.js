@@ -9,13 +9,13 @@ import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
 import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv, parseBankCsv } from './importer.js'
-import { pollMailCapture } from './mailin.js'
 import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
 import { analyzeBillForAlternatives } from './recommend.js'
+import { auditMonth, buildAuditCsv } from './audit.js'
 import { agentChat } from './agent.js'
-import { shortcutFile } from './shortcut.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
+import { pushEvent, recentEvents, onEvent } from './notify.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
@@ -126,7 +126,6 @@ app.get('/api/health', (req, res) => {
     autoConfirm: autoConfirmAt(),
     modelStatus: getModelStatus(),
     billImport: { ...billStatus, enabled: billStatus.enabled || mailConfig().billsEnabled },
-    mailCapture: { ...mailCaptureStatus, enabled: mailCaptureStatus.enabled || (mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1') },
   })
 })
 
@@ -247,20 +246,7 @@ app.post('/api/capture', async (req, res) => {
   res.status(201).json({ ok: true, data: r })
 })
 
-// ---- 银行短信自动记账（iOS 快捷指令「收到短信」自动化调用，0 点击） ----
-app.post('/api/sms', express.text({ type: () => true, limit: '50kb' }), async (req, res) => {
-  const text = String(req.body || '').trim()
-  if (!text) return fail(res, 400, 'bad_request', '短信内容为空')
-  const r = await captureTextCore(text, null, 'sms', autoConfirmAt())
-  // 解析不出金额的（验证码/通知类短信）静默丢弃，不产生垃圾记录
-  if (r.parse.code !== 'ok' || r.transaction.amount == null) {
-    db.prepare('DELETE FROM transactions WHERE id = ?').run(r.transaction.id)
-    return res.json({ ok: true, data: { skipped: true, reason: '非交易短信' } })
-  }
-  res.json({ ok: true, data: { skipped: false, transaction: r.transaction } })
-})
-
-// ---- AI 助手（网页聊天；与主题为 PW 的邮箱沟通共用同一套 Agent） ----
+// ---- AI 助手（网页聊天） ----
 app.post('/api/agent', async (req, res) => {
   const { text } = req.body || {}
   if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
@@ -286,8 +272,13 @@ async function runBillImport() {
     // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）
     if (!r.error && r.files > 0) {
       db.prepare("INSERT INTO meta (k, v) VALUES ('last_bill_import', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(nowIso())
-      // 通知已打开的网页：月度账单处理完成，刷新账本
-      liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files })
+      // 只有真的有变化才打扰用户：重复检查同一批邮件（新增 0 合并 0）不再发事件/红点
+      if ((r.imported || 0) > 0 || (r.merged || 0) > 0) {
+        // 通知已打开的网页：月度账单处理完成，刷新账本
+        liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files })
+        // 事件中心：顶栏红点 + 邮箱动态（账单邮件处理完成）
+        pushEvent('bill', '账单邮件处理完成', `收到 ${r.files} 封账单邮件：新增 ${r.imported || 0} 笔，合并重复 ${r.merged || 0} 笔，跳过 ${r.skipped || 0} 笔${r.mergeError ? `；⚠ 合并审核失败(${r.mergeError})，新增可能含重复` : ''}`)
+      }
     }
     return r
   } catch (e) {
@@ -311,7 +302,7 @@ app.post('/api/import-bills/file', express.raw({ type: () => true, limit: '20mb'
 })
 
 // ---- 实时事件流：月度账单处理完成后推送事件，网页据此刷新账本（其他邮件不推送） ----
-// EventSource 无法带自定义请求头，令牌走查询参数 ?t=（与 /shortcut 一致）
+// EventSource 无法带自定义请求头，令牌走查询参数 ?t=
 app.get('/api/events', (req, res) => {
   if (!AUTH_TOKEN || !req.query.t || !tokenOk(String(req.query.t), AUTH_TOKEN)) {
     return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效' })
@@ -322,31 +313,17 @@ app.get('/api/events', (req, res) => {
   res.write('retry: 15000\n\n')
   const onBills = (d) => { try { res.write(`event: bills\ndata: ${JSON.stringify(d)}\n\n`) } catch { /* 连接已断 */ } }
   liveEvents.on('bills', onBills)
+  // 事件中心：邮件回信/自动入账/月报等实时推给网页（toast + 邮箱动态刷新）
+  const onNotify = (ev) => { try { res.write(`event: notify\ndata: ${JSON.stringify(ev)}\n\n`) } catch { /* 连接已断 */ } }
+  const offNotify = onEvent(onNotify)
   const hb = setInterval(() => { try { res.write(': hb\n\n') } catch { /* 忽略 */ } }, 25000)
-  req.on('close', () => { clearInterval(hb); liveEvents.off('bills', onBills) })
+  req.on('close', () => { clearInterval(hb); liveEvents.off('bills', onBills); offNotify() })
 })
 
-// ---- 邮箱沟通 AI Agent（只读"自己发的、主题为 PW"的邮件，自动处理并回信） ----
-const mailCaptureStatus = { enabled: false, lastRun: null, processed: 0, error: '' }
-async function runMailCapture() {
-  mailCaptureStatus.enabled = mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1'
-  try {
-    const r = await pollMailCapture(mailConfig(), autoConfirmAt())
-    mailCaptureStatus.lastRun = nowIso()
-    mailCaptureStatus.processed = r.processed
-    mailCaptureStatus.error = r.error || ''
-    return r
-  } catch (e) {
-    mailCaptureStatus.lastRun = nowIso()
-    mailCaptureStatus.error = String(e?.message || e).slice(0, 200)
-    return { processed: 0, error: mailCaptureStatus.error }
-  }
-}
-app.post('/api/mail-capture', async (req, res) => {
-  if (!(mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1')) {
-    return fail(res, 400, 'not_configured', '未开启邮箱沟通（.env 里 MAIL_CAPTURE=1），见 README')
-  }
-  res.json({ ok: true, data: await runMailCapture() })
+// ---- 事件中心拉取：邮箱助手动态（托盘不经过这里，直接读 data/notify.json） ----
+app.get('/api/notify', (req, res) => {
+  const after = Number(req.query.after) || 0
+  res.json({ ok: true, ...recentEvents(after, 30) })
 })
 
 // ---- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----
@@ -385,9 +362,14 @@ app.delete('/api/budgets', (req, res) => {
 })
 
 // ---- 月度报告（邮箱 / Server酱 微信推送） ----
+// lite=1：跳过 LLM 叙述与平替推荐（冒烟测试/快速预览用），只构建纯文本汇总
 app.get('/api/report/preview', async (req, res) => {
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
   const s = summarizeMonth(month)
+  if (req.query.lite === '1') {
+    const text = buildReportText(s, '', [])
+    return res.json({ ok: true, data: { text, html: '', narrative: '', alts: [], channels: { email: mailerConfig().enabled, serverchan: Boolean(serverChanKey()) } } })
+  }
   const narrative = await generateReportNarrative(s)
   const alts = await analyzeBillForAlternatives(month)
   if (alts.length) saveAltRec(month, alts)
@@ -400,6 +382,7 @@ app.post('/api/report', async (req, res) => {
     return fail(res, 400, 'not_configured', '未配置任何发送渠道（SMTP_* 或 SERVERCHAN_KEY），见 README「月报提醒」')
   }
   const r = await sendMonthlyReport(month)
+  pushEvent('report', '月报已发送', `${month} 月度汇总已送达（${(r.channels || []).join('、') || '无渠道'}）`)
   res.json({ ok: true, data: { month, channels: r.channels } })
 })
 
@@ -441,25 +424,11 @@ async function checkMonthlyReport() {
   if (sent === key) return
   await sendMonthlyReport(key)
   db.prepare("INSERT INTO meta (k, v) VALUES ('last_report_month', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(key)
+  pushEvent('report', '月报已自动发送', `${key} 月度汇总已送达你的邮箱/微信`)
 }
 
-// ---- iOS 快捷指令下载（银行短信自动记账；文件含令牌 → 必须携带令牌 ?t= 才能下载） ----
-app.get('/shortcut', (req, res) => {
-  if (req.query.t !== AUTH_TOKEN) {
-    return res.status(401).send('需要访问令牌（?t=）')
-  }
-  const { lan, tailscale } = scanInterfaces()
-  const tsName = env('TAILSCALE_NAME', '').replace(/\/+$/, '')
-  const base = tsName ? `https://${tsName}` : tailscale[0] ? `http://${tailscale[0].ip}:${PORT}` : lan[0] ? `http://${lan[0].ip}:${PORT}` : `http://localhost:${PORT}`
-  const buf = shortcutFile(base, AUTH_TOKEN)
-  res.set('Content-Type', 'application/octet-stream')
-  res.set('Content-Disposition', 'attachment; filename="PennyWise-SMS.shortcut"')
-  res.set('Cache-Control', 'no-store')
-  res.send(buf)
-})
-
 // ---- 采集：支付截图 → 视觉模型解析 → 待确认 ----
-// 支持两种形式：JSON base64（网页端）/ 原始图片字节（iOS 快捷指令等）
+// 支持两种形式：JSON base64（网页端）/ 原始图片字节（移动端等）
 app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application/json'), limit: '16mb' }), async (req, res) => {
   let buf = null
   let mime = 'image/jpeg'
@@ -744,6 +713,51 @@ app.get('/api/summary', (req, res) => {
   })
 })
 
+// ---- 账单核验（原始账单行 vs 账本逐行比对 + 强模型终审；报告可下载 CSV） ----
+const validMonth = (v) => (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v) ? v : currentMonth())
+app.get('/api/audit', async (req, res) => {
+  try { res.json({ ok: true, data: await auditMonth(validMonth(req.query.month)) }) }
+  catch (e) { fail(res, 500, 'audit_error', String(e?.message || e).slice(0, 200)) }
+})
+app.get('/api/audit/export', async (req, res) => {
+  try {
+    const month = validMonth(req.query.month)
+    const data = await auditMonth(month)
+    res.set('Content-Type', 'text/csv; charset=utf-8')
+    res.set('Content-Disposition', `attachment; filename="pennywise-audit-${month}.csv"`)
+    res.set('Cache-Control', 'no-store')
+    res.send('\uFEFF' + buildAuditCsv(data))
+  } catch (e) { fail(res, 500, 'audit_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// ---- 商家维度月度汇总（钱花在哪个商家；含上月环比） ----
+app.get('/api/merchants', (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  const prevMonth = (() => {
+    const [y, m] = month.split('-').map(Number)
+    const d = new Date(y, m - 2, 1)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  })()
+  const q = (m) => db.prepare(`
+    SELECT COALESCE(NULLIF(TRIM(merchant), ''), '（未记商户）') AS name, SUM(amount) AS total, COUNT(*) AS n
+    FROM transactions WHERE ts LIKE ? AND status = 'confirmed' AND amount IS NOT NULL AND direction = 'expense'
+    GROUP BY name ORDER BY total DESC LIMIT 60
+  `).all(m + '%').map((r) => ({ name: r.name, total: Number(r.total), n: Number(r.n) }))
+  const cur = q(month)
+  const prev = q(prevMonth)
+  const prevMap = new Map(prev.map((r) => [r.name, r]))
+  res.json({
+    ok: true,
+    data: {
+      month,
+      prevMonth,
+      merchants: cur.map((r) => ({ ...r, prev: prevMap.get(r.name)?.total || 0, prevN: prevMap.get(r.name)?.n || 0 })),
+      curTotal: cur.reduce((a, b) => a + b.total, 0),
+      prevTotal: prev.reduce((a, b) => a + b.total, 0),
+    },
+  })
+})
+
 // 分享入口兜底（无 Service Worker 的浏览器直接回到首页）
 app.post('/share', (req, res) => res.redirect(303, '/'))
 
@@ -756,17 +770,12 @@ app.use((err, req, res, next) => {
   fail(res, 500, 'server_error', String(err?.message || err).slice(0, 300))
 })
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
   // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次（只读白名单发件人）
   if (mailConfig().billsEnabled) {
     setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
-  }
-  // 邮箱沟通 AI Agent：配置后每 3 分钟检查一次"自己发的、主题 PW"的邮件
-  if (mailConfig().imapConfigured && env('MAIL_CAPTURE', '0') === '1') {
-    setTimeout(() => { runMailCapture().catch(() => {}) }, 10000)
-    setInterval(() => { runMailCapture().catch(() => {}) }, 3 * 60 * 1000)
   }
   // 月度报告：每 30 分钟检查一次是否到发送时刻
   setInterval(() => { checkMonthlyReport().catch(() => {}) }, 30 * 60 * 1000)
@@ -783,4 +792,12 @@ app.listen(PORT, '0.0.0.0', () => {
   if (!AUTH_TOKEN) console.log('  ⚠ 未配置 AUTH_TOKEN，任何能访问此端口的人都能读写账本，请编辑 .env 设置')
   if (!llmConfig().enabled) console.log('  ⚠ 未配置 LLM_API_KEY，采集将进入手动确认模式，详见 README.md')
   console.log('')
+})
+// 端口被占（看门狗重复拉起 / 手动双开）→ 立即退出，绝不留"无端口僵尸"拖垮系统
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 已被占用（可能已有 PennyWise 在运行），本进程退出`)
+    process.exit(1)
+  }
+  console.error('server error:', e)
 })

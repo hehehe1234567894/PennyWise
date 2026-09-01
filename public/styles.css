@@ -56,6 +56,9 @@ main section[hidden] { display: none !important; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4a6b; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ---------- 侧栏（电脑端显示，手机端隐藏） ---------- */
+.sidebar { display: none; }
+
 /* ---------- 顶栏 ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 30;
@@ -325,7 +328,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .cat-n { color: var(--dim); font-size: 11px; }
 .cat-bar-wrap { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; height: 9px; overflow: hidden; }
-.cat-bar { height: 100%; border-radius: 6px; width: var(--w, 0%); animation: growW .6s cubic-bezier(.22,1,.36,1) both; }
+.cat-bar { height: 100%; border-radius: 6px; width: var(--w, 0%); background: linear-gradient(90deg, var(--accent), #7c8cff); animation: growW .6s cubic-bezier(.22,1,.36,1) both; }
 .cat-amt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 
 /* ---------- 底部标签栏（手机） ---------- */
@@ -453,26 +456,64 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ================= 电脑版（左右两栏仪表盘；仅真电脑生效，半屏窗口也启用） ================= */
+/* ================= 电脑版（左侧导航栏 + 两栏仪表盘；仅真电脑生效，半屏窗口也启用） ================= */
 @media (min-width: 760px) and (pointer: fine) {
   .tabs { display: none; }
+  .topbar { display: none; }        /* 顶栏职责全部移入侧栏 */
   .chat-fab { bottom: 24px; right: 24px; }
+
+  /* 左侧导航栏（BigModel 风） */
+  .sidebar {
+    display: flex; flex-direction: column;
+    position: fixed; top: 0; left: 0; bottom: 0; width: 216px;
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent 30%), var(--card);
+    border-right: 1px solid var(--border);
+    padding: 16px 12px 14px; gap: 6px; z-index: 35;
+  }
+  .side-logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+  .side-brand h1 { font-size: 16px; margin: 0; letter-spacing: .3px; font-weight: 700; }
+  .side-brand .ver-chip { margin-left: 6px; }
+  .side-nav { display: flex; flex-direction: column; gap: 4px; }
+  .side-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 10px 12px; border-radius: 10px;
+    background: transparent; border: none; color: var(--dim);
+    font-size: 14px; font-family: inherit; text-align: left; cursor: pointer;
+    position: relative; transition: background .15s, color .15s;
+  }
+  .side-item:hover { background: var(--card2); color: var(--text); }
+  .side-item.active { background: var(--card2); color: var(--text); font-weight: 600; }
+  .side-item.active::before {
+    content: ''; position: absolute; left: 0; top: 22%; bottom: 22%;
+    width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
+  }
+  .side-ico { font-size: 16px; width: 22px; text-align: center; flex: none; }
+  .side-foot {
+    margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .side-foot .side-item { padding: 8px 12px; }
+  .side-item .mail-dot { top: 8px; right: 10px; box-shadow: 0 0 0 2px var(--card); }
+
   main {
-    max-width: 1360px;
-    height: calc(100vh - 59px);      /* 整个仪表盘一屏放下 */
+    margin-left: 216px;
+    max-width: none;
+    height: 100vh;                   /* 无顶栏 → 整屏仪表盘 */
     display: flex; flex-direction: column;
     padding: 16px 20px 20px;
   }
   .model-alert { flex: none; margin: 0 0 14px; }
+  /* 单面板视图：侧边栏点击 = 切换页面（v39），当前面板占满整个内容区 */
   .dash {
     flex: 1 1 auto; min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 1fr;  /* 左右两栏等宽：左流水 右统计 */
-    grid-template-rows: 1fr;         /* 单行撑满高度：两栏等高 */
-    gap: 16px;
+    display: flex; flex-direction: column; gap: 16px;
   }
-  #tab-list  { grid-column: 1; grid-row: 1; }
-  #tab-stats { grid-column: 2; grid-row: 1; }
+  .dash .panel { flex: 1 1 auto; }
+  #tab-mail { max-height: none; }
+  #tab-mail .mail-feed { max-height: none; flex: 1 1 auto; }
+  #tab-mail .hint { display: none; }  /* 电脑端提示早就看过，省空间 */
+  /* 宽屏下流水/统计主区限宽居中，避免超宽行拉太长 */
+  #tab-list .panel-scroll, #tab-stats .panel-scroll { max-width: 1180px; width: 100%; margin: 0 auto; }
   .panel { margin-bottom: 0; min-height: 0; min-width: 0; }
   .panel-head { flex-wrap: nowrap; }
   .panel-scroll { overflow-y: auto; padding-right: 6px; }
@@ -516,3 +557,63 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   .day-bar { max-width: 10px; }
   .stat-num { font-size: 18px; }
 }
+
+/* ================= 邮箱助手（处理动态 / 状态 / 系统通知） ================= */
+.mail-btn { position: relative; }
+.mail-dot {
+  position: absolute; top: 5px; right: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #ef4444; box-shadow: 0 0 0 2px var(--bg);
+}
+.mail-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+.mail-feed { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+.feed-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; animation: fadeUp .25s cubic-bezier(.22,1,.36,1) both;
+}
+.feed-ico { font-size: 18px; line-height: 1.3; flex: none; }
+.feed-main { flex: 1; min-width: 0; }
+.feed-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.feed-body { font-size: 12.5px; color: var(--dim); margin-top: 2px; word-break: break-word; white-space: pre-wrap; }
+.feed-time { flex: none; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; padding-top: 2px; }
+
+/* ================= 背景粒子装饰（DeepSeek 风点阵波浪） ================= */
+#bg-fx { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+main { position: relative; z-index: 1; }
+
+/* ================= 商家排行（钱花在哪个商家） ================= */
+.m-total { float: right; color: var(--dim); font-weight: 500; font-size: 11px; letter-spacing: .2px; }
+.m-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 10px; cursor: pointer;
+}
+.m-row:hover { background: var(--card2); }
+.m-main { flex: 1; min-width: 0; }
+.m-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.m-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-cnt { flex: none; font-size: 10.5px; color: var(--dim); }
+.m-badge { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+.m-badge.up { background: rgba(239,68,68,.14); color: var(--red); }
+.m-badge.down { background: rgba(34,197,94,.14); color: var(--green); }
+.m-badge.flat { background: var(--card2); color: var(--dim); font-weight: 500; }
+.m-badge.new { background: rgba(79,140,255,.15); color: #4f8cff; }
+.m-nums { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.m-nums b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.m-nums span { font-size: 10.5px; color: var(--dim); }
+
+/* ================= 每日支出悬浮分解气泡 ================= */
+.day-chart-wrap { position: relative; }
+.day-col:hover .day-bar { filter: brightness(1.35); }
+.day-tip {
+  position: absolute; top: 2px; transform: translateX(-50%);
+  background: var(--card2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; min-width: 190px; max-width: 250px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.45); z-index: 5; pointer-events: none;
+  animation: fadeUp .18s cubic-bezier(.22,1,.36,1) both;
+}
+.day-tip-date { font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 7px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.day-tip-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 11.5px; padding: 1.5px 0; }
+.day-tip-name { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+.day-tip-row b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.day-tip-hint { margin-top: 6px; font-size: 10px; color: var(--dim); opacity: .7; }

@@ -452,19 +452,27 @@ export async function reconcileAndImport(rows) {
     const cands = candStmt.all(r.direction, r.amount - 0.05, r.amount + 0.05, lo, hi)
     if (cands.length) pairs.push({ i, bill: r, cands })
   }
-  // 3) LLM 一次性决策（只有存在疑似重复对时才调用，零候选 = 零 token）
+  // 3) LLM 合并审核（只有存在疑似重复对时才调用，零候选 = 零 token）
+  //    分批（每批 12 对）防超时；失败自动重试一次；彻底失败 → mergeError 明确上报，绝不静默混入重复
   const decisions = new Map()
+  let mergeError = ''
   if (pairs.length && env('BILL_LLM_MERGE', '1') === '1') {
-    const payload = pairs.map((p) => ({
-      bill: { t: p.bill.ts, a: p.bill.amount, d: p.bill.direction, m: p.bill.merchant, g: p.bill.goods_name },
-      cands: p.cands.map((c) => ({ id: c.id, t: c.ts, a: c.amount, m: c.merchant, g: c.goods_name })),
-    }))
-    const res = await llmMergeDecide(payload)
-    if (res.ok) {
+    const CHUNK = 12
+    const chunks = []
+    for (let i = 0; i < pairs.length; i += CHUNK) chunks.push(pairs.slice(i, i + CHUNK))
+    for (const chunk of chunks) {
+      const payload = chunk.map((p) => ({
+        bill: { t: p.bill.ts, a: p.bill.amount, d: p.bill.direction, m: p.bill.merchant, g: p.bill.goods_name },
+        cands: p.cands.map((c) => ({ id: c.id, t: c.ts, a: c.amount, m: c.merchant, g: c.goods_name })),
+      }))
+      let res = await llmMergeDecide(payload)
+      if (!res.ok) res = await llmMergeDecide(payload) // 重试一次（网络抖动/偶发 JSON 截断）
+      if (!res.ok) { mergeError = res.error || 'unknown'; break }
       for (const d of res.decisions) {
-        if (d && d.bill_index != null && d.match_id != null) {
-          decisions.set(pairs[d.bill_index].i, d.match_id)
-        }
+        const bi = Number(d && d.bill_index)
+        if (!Number.isInteger(bi) || bi < 0 || bi >= chunk.length) continue // 越界下标直接忽略
+        const mid = Number(d.match_id)
+        if (Number.isInteger(mid) && mid > 0) decisions.set(chunk[bi].i, mid)
       }
     }
   }
@@ -490,15 +498,23 @@ export async function reconcileAndImport(rows) {
     }
   }
   // 4) 应用：匹配 → 既有记录挂账单单号（合并）；未匹配 → 插入新行
+  //    同一条已有记录只允许被一条账单行认领：第二条起按新增入库，绝不丢账单数据
   let imported = 0
   let merged = 0
+  const usedMatches = new Set()
+  const insBillRow = db.prepare(`INSERT OR REPLACE INTO bill_rows
+    (ext_id, ts, amount, direction, merchant, goods_name, account, raw_text, outcome, match_tx_id, match_tx_uid, imported_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const getUid = db.prepare('SELECT uid FROM transactions WHERE id = ?')
   for (let i = 0; i < fresh.length; i++) {
     const r = fresh[i]
     const matchId = decisions.get(i)
-    if (matchId) {
+    if (matchId && !usedMatches.has(matchId)) {
       const rev = nextRev()
       db.prepare('UPDATE transactions SET ext_id = ?, rev = ?, updated_at = ? WHERE id = ?').run(r.ext_id || null, rev, nowIso(), matchId)
+      usedMatches.add(matchId)
       merged++
+      if (r.ext_id) insBillRow.run(r.ext_id, validTs(r.ts) || nowIso(), r.amount, r.direction, r.merchant || '', r.goods_name || '', r.account || '', r.raw_text || '', 'merged', matchId, getUid.get(matchId)?.uid || null, nowIso())
       continue
     }
     const ts = validTs(r.ts) || nowIso()
@@ -509,13 +525,15 @@ export async function reconcileAndImport(rows) {
     }
     const rev = nextRev()
     const now = nowIso()
-    db.prepare(`
+    const uid = newUid()
+    const info = db.prepare(`
       INSERT INTO transactions (uid, ext_id, ts, created_at, amount, currency, direction, merchant, goods_name, category, account, raw_text, source, status, confidence, note, edited, rev, updated_at)
       VALUES (?,?,?,?,?,'CNY',?,?,?,?,?,?,'csv','confirmed',NULL,?,0,?,?)
-    `).run(newUid(), r.ext_id || null, ts, now, r.amount, r.direction, r.merchant, r.goods_name, category, r.account, r.raw_text, r.note, rev, now)
+    `).run(uid, r.ext_id || null, ts, now, r.amount, r.direction, r.merchant, r.goods_name, category, r.account, r.raw_text, r.note, rev, now)
+    if (r.ext_id) insBillRow.run(r.ext_id, ts, r.amount, r.direction, r.merchant || '', r.goods_name || '', r.account || '', r.raw_text || '', 'inserted', Number(info.lastInsertRowid), uid, now)
     imported++
   }
-  return { imported, skipped, merged, reviewedPairs: pairs.length, categorized: catMap.size }
+  return { imported, skipped, merged, reviewedPairs: pairs.length, categorized: catMap.size, mergeError }
 }
 
 // 行数据 → 确定性解析（按平台提示）→ 失败 LLM 兜底 → 返回行数组（不入库）
@@ -864,6 +882,7 @@ export async function importBills(cfg) {
   return {
     imported: rec.imported, skipped: rec.skipped, merged: rec.merged,
     reviewedPairs: rec.reviewedPairs, categorized: rec.categorized,
+    mergeError: rec.mergeError || '',
     error: '', files: newZips.length, passwords: passwords.length,
   }
 }

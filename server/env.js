@@ -3,7 +3,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-export const DATA_DIR = path.join(ROOT, 'data')
+// PENNYWISE_DATA_DIR：测试隔离用（指向临时目录）；默认项目 data/
+export const DATA_DIR_OVERRIDE = process.env.PENNYWISE_DATA_DIR || ''
+export const DATA_DIR = DATA_DIR_OVERRIDE || path.join(ROOT, 'data')
 export const PUBLIC_DIR = path.join(ROOT, 'public')
 
 // 极简 .env 加载：不依赖 dotenv 包，`npm start` 开箱即用

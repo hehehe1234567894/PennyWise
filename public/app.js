@@ -188,35 +188,31 @@
   function applyLayout() {
     isDesktop = mqDesktop.matches
     document.body.classList.toggle('desktop', isDesktop)
-    if (isDesktop) {
-      ;['list', 'stats'].forEach((t) => { $(`tab-${t}`).hidden = false })
-      renderList().catch(() => {})
-      renderStats().catch(() => {})
-    } else {
-      switchTab(document.querySelector('.tab.active')?.dataset.tab || 'list')
-    }
+    // 桌面端同样一次只显示一个面板（侧边栏 = 真正的页面切换）
+    switchTab(document.querySelector('.tab.active')?.dataset.tab || 'list')
   }
   mqDesktop.addEventListener('change', applyLayout)
 
-  const TAB_RENDER = { list: renderList, stats: renderStats }
+  const TAB_RENDER = { list: renderList, stats: renderStats, mail: renderMail }
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
-    if (!isDesktop) {
-      ;['list', 'stats'].forEach((t) => {
-        const el = $(`tab-${t}`)
-        el.hidden = t !== name
-        el.classList.remove('tab-enter')
-      })
-      const target = $(`tab-${name}`)
-      void target.offsetWidth // 强制重排以重放入场动画
-      target.classList.add('tab-enter')
-    } else {
-      const target = $(`tab-${name}`)
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
+    document.querySelectorAll('.side-item[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
+    if (name === 'mail') markMailRead() // 任何入口（侧栏/顶栏）打开邮箱页都算已读
+    ;['list', 'stats', 'mail'].forEach((t) => {
+      const el = $(`tab-${t}`)
+      el.hidden = t !== name
+      el.classList.remove('tab-enter')
+    })
+    const target = $(`tab-${name}`)
+    void target.offsetWidth // 强制重排以重放入场动画
+    target.classList.add('tab-enter')
     if (TAB_RENDER[name]) TAB_RENDER[name]()
   }
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)))
+  // 侧栏（电脑端）：导航 + AI 助手 + 设置
+  document.querySelectorAll('.side-item[data-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)))
+  $('side-chat').addEventListener('click', () => $('btn-chat').click())
+  $('side-settings').addEventListener('click', showSettings)
 
   // ---------- 时间工具 ----------
   function localMonth() {
@@ -609,7 +605,9 @@
     }
   }
 
-  async function renderList() {
+  async function renderList(keepScroll = false) {
+    const scroller = document.querySelector('#tab-list .panel-scroll')
+    const st = keepScroll && scroller ? scroller.scrollTop : 0
     const month = $('list-month').value || localMonth()
     const q = $('list-q').value.trim().toLowerCase()
     const all = await mAll('tx').catch(() => [])
@@ -641,6 +639,7 @@
       <span>支出 <b class="expense">-${fmtMoney(s.expense)}</b></span>
       <span>日均 <b class="expense">-${fmtMoney(s.dailyAvg)}</b></span>
       <span>结余 <b>${fmtMoney(s.balance)}</b></span>`
+    if (scroller && keepScroll) scroller.scrollTop = st
   }
 
   $('list-items').addEventListener('click', (e) => {
@@ -650,7 +649,9 @@
     if (tx) openEditor('edit', tx)
   })
 
-  async function renderStats() {
+  async function renderStats(keepScroll = false) {
+    const scroller = document.querySelector('#tab-stats .panel-scroll')
+    const st = keepScroll && scroller ? scroller.scrollTop : 0
     const month = $('stats-month').value || localMonth()
     const all = await mAll('tx').catch(() => [])
     const s = localSummary(all, month)
@@ -659,10 +660,11 @@
       <div class="stat-card"><div class="stat-num expense" data-cnt="${s.expense}" data-sign="-" data-dec="2">-${fmtMoney(s.expense)}</div><div class="stat-label">支出</div></div>
       <div class="stat-card"><div class="stat-num" data-cnt="${Math.abs(s.balance)}" data-sign="${s.balance < 0 ? '-' : '+'}" data-dec="2">${fmtMoney(s.balance)}</div><div class="stat-label">结余</div></div>
       <div class="stat-card"><div class="stat-num" data-cnt="${s.count}" data-sign="" data-dec="0">${s.count}</div><div class="stat-label">笔数</div></div>`
-    requestAnimationFrame(runCountUps)
+    requestAnimationFrame(() => { runCountUps(); if (scroller && keepScroll) scroller.scrollTop = st })
     renderStatsExtra(s)
     renderBudget(month)
     renderRecs(month)
+    renderMerchants(month).catch(() => {})
   }
 
   // 信息面板：每日支出 / 分类环图 / 账户分布 / 近6月趋势 / 收支排行
@@ -741,6 +743,57 @@
           <div class="day-lbl">${t.label}</div>
         </div>`
       }).join('')
+      // DeepSeek 式悬浮分解气泡：悬停某天 → 显示当天总额 + 商家明细 TOP3
+      const chart = $('day-chart')
+      const tip = $('day-tip')
+      if (!chart || !tip) return
+      const byDay = new Map()
+      for (const x of all) {
+        if (x.status !== 'confirmed' || x.direction !== 'expense' || x.amount == null) continue
+        const tss = String(x.ts || '')
+        if (!tss.startsWith(s.month)) continue
+        const day = Number(tss.slice(8, 10))
+        if (!(day >= 1 && day <= s.daysInMonth)) continue
+        const key = day - 1
+        const name = String(x.merchant || '').trim() || '（未记商户）'
+        const arr = byDay.get(key) || []
+        const it = arr.find((z) => z.name === name)
+        if (it) it.amount += Number(x.amount)
+        else arr.push({ name, amount: Number(x.amount) })
+      }
+      for (const arr of byDay.values()) arr.sort((a, b) => b.amount - a.amount)
+      const showTip = (col, key) => {
+        const total = s.days[key] || 0
+        if (!(total > 0)) { tip.classList.add('hidden'); return }
+        const arr = byDay.get(key) || []
+        const top = arr.slice(0, 3)
+        const rest = arr.slice(3).reduce((a, z) => a + z.amount, 0)
+        tip.innerHTML = `<div class="day-tip-date">${s.month}-${String(key + 1).padStart(2, '0')} · 共 ¥${fmtMoney(total)}</div>` +
+          top.map((z) => `<div class="day-tip-row"><span class="day-tip-name">${esc(z.name)}</span><b>¥${fmtMoney(z.amount)}</b></div>`).join('') +
+          (rest > 0.005 ? `<div class="day-tip-row"><span class="day-tip-name">其他 ${arr.length - 3} 项</span><b>¥${fmtMoney(rest)}</b></div>` : '') +
+          (arr.length ? '<div class="day-tip-hint">点击柱条在流水中查看当天</div>' : '')
+        tip.classList.remove('hidden')
+        const wrap = chart.parentElement
+        let left = col.offsetLeft + col.offsetWidth / 2
+        left = Math.max(90, Math.min(left, (wrap.clientWidth || 300) - 90))
+        tip.style.left = left + 'px'
+      }
+      const dayKey = (col) => [...chart.children].indexOf(col)
+      chart.addEventListener('mouseover', (e) => {
+        const col = e.target.closest('.day-col')
+        if (col) showTip(col, dayKey(col))
+      })
+      chart.addEventListener('mouseleave', () => tip.classList.add('hidden'))
+      chart.addEventListener('click', (e) => {
+        const col = e.target.closest('.day-col')
+        if (!col) return
+        const key = dayKey(col)
+        if (!((s.days[key] || 0) > 0)) return
+        $('list-month').value = s.month
+        $('list-q').value = ''
+        switchTab('list')
+        renderList().catch(() => {})
+      })
     })
     // TOP 支出 / 收入
     const topExp = (s.topExpenses || []).map((t, i) => `
@@ -748,13 +801,13 @@
     const topInc = (s.topIncomes || []).map((t, i) => `
       <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.note ? ' · ' + esc(t.note) : ''}</span><b class="income">+${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
     $('stats-extra').innerHTML = `
-      <div class="stat-block" id="rec-block">
-        <div class="stat-block-title">💡 平替与优质推荐（本月账单）</div>
-        <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
+      <div class="stat-block" id="merchant-block">
+        <div class="stat-block-title">🏪 钱花在哪个商家（本月）</div>
+        <p class="empty">加载中…</p>
       </div>
       <div class="stat-block">
         <div class="stat-block-title">📅 每日支出（本月）· 日均 ${fmtMoney(s.dailyAvg)}</div>
-        <div class="day-chart">${dayBars}</div>
+        <div class="day-chart-wrap"><div class="day-chart" id="day-chart">${dayBars}</div><div id="day-tip" class="day-tip hidden"></div></div>
       </div>
       <div class="stat-row">
         <div class="stat-block">
@@ -778,8 +831,65 @@
           <div class="top-sub" style="margin-top:8px">💚 最大收入</div>
           ${topInc}
         </div>
+      </div>
+      <div class="stat-block" id="rec-block">
+        <div class="stat-block-title">💡 平替与优质推荐（本月账单）</div>
+        <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
       </div>`
     requestAnimationFrame(runCountUps)
+  }
+
+  // 商家维度月度排行（服务端聚合 + 上月环比；点击商家 → 流水按该商家过滤）
+  let merchantsFull = false
+  async function renderMerchants(month, showAll) {
+    const el = $('merchant-block')
+    if (!el) return
+    try {
+      const d = await api('/api/merchants?month=' + encodeURIComponent(month))
+      const list = d.merchants || []
+      if (!list.length) {
+        el.innerHTML = '<div class="stat-block-title">🏪 钱花在哪个商家（本月）</div><p class="empty">这个月还没有支出</p>'
+        return
+      }
+      merchantsFull = !!showAll
+      const max = Math.max(...list.map((m) => m.total), 1)
+      const rows = (top) => list.slice(0, top).map((m, i) => {
+        const pct = Math.round((m.total / (d.curTotal || 1)) * 100)
+        let badge = ''
+        if (m.prev > 0) {
+          const diff = Math.round(((m.total - m.prev) / m.prev) * 100)
+          if (diff > 2) badge = `<span class="m-badge up">↑${diff}%</span>`
+          else if (diff < -2) badge = `<span class="m-badge down">↓${-diff}%</span>`
+          else badge = '<span class="m-badge flat">持平</span>'
+        } else if (d.prevTotal > 0) {
+          badge = '<span class="m-badge new">新</span>'
+        }
+        return `<div class="m-row" data-merchant="${esc(m.name)}" title="点击在流水中查看该商家的每一笔">
+          <span class="top-rank">${i + 1}</span>
+          <div class="m-main">
+            <div class="m-head"><span class="m-name">${esc(m.name)}</span>${badge}<span class="m-cnt">${m.n}笔</span></div>
+            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(4, Math.round((m.total / max) * 100))}%"></div></div>
+          </div>
+          <div class="m-nums"><b class="expense">-${fmtMoney(m.total)}</b><span>占${pct}%</span></div>
+        </div>`
+      }).join('')
+      const limit = merchantsFull ? list.length : Math.min(12, list.length)
+      el.innerHTML = `<div class="stat-block-title">🏪 钱花在哪个商家（本月）<span class="m-total">共 -${fmtMoney(d.curTotal)}${d.prevTotal > 0 ? ` · 上月 -${fmtMoney(d.prevTotal)}` : ''}</span></div>
+        <div id="m-rows">${rows(limit)}</div>
+        ${list.length > 12 && !merchantsFull ? `<button class="btn btn-small" id="m-more">展开全部 ${list.length} 个商家</button>` : ''}`
+      const moreBtn = $('m-more')
+      if (moreBtn) moreBtn.addEventListener('click', () => renderMerchants(month, true))
+      $('m-rows').addEventListener('click', (e) => {
+        const row = e.target.closest('.m-row')
+        if (!row) return
+        $('list-month').value = month
+        $('list-q').value = row.dataset.merchant === '（未记商户）' ? '' : row.dataset.merchant
+        switchTab('list')
+        renderList().catch(() => {})
+      })
+    } catch (e) {
+      el.innerHTML = `<div class="stat-block-title">🏪 钱花在哪个商家（本月）</div><p class="empty">加载失败：${esc(e.message)}</p>`
+    }
   }
 
   // 账单驱动的平替/优质推荐（服务器缓存结果，force 重新分析）
@@ -853,6 +963,22 @@
         renderBudget($('stats-month').value || localMonth())
       } catch (e) { toast('保存失败：' + e.message) }
     })
+    // 按本月实际支出一键生成预算（>50 元向上取整到十位，避免零碎数字）
+    $('bud-auto').addEventListener('click', async () => {
+      const month = $('stats-month').value || localMonth()
+      try {
+        const s = await api('/api/summary?month=' + encodeURIComponent(month))
+        const cats = (s.byCategory || []).filter((c) => c.total > 0)
+        if (!cats.length) return toast('这个月还没有支出，没法按实际生成')
+        if (!confirm(`将按 ${month} 实际支出为 ${cats.length} 个分类设置预算（覆盖已有），继续？`)) return
+        for (const c of cats) {
+          const limit = c.total <= 50 ? Math.ceil(c.total) : Math.ceil(c.total / 10) * 10
+          await api('/api/budgets', { method: 'PUT', body: { month, category: c.name, limit } })
+        }
+        toast(`✓ 已按本月实际为 ${cats.length} 个分类生成预算`)
+        renderBudget(month)
+      } catch (e) { toast('生成失败：' + e.message) }
+    })
     $('budget-list').addEventListener('click', async (e) => {
       const row = e.target.closest('.cat-row')
       if (!row || !confirm('删除这个预算？')) return
@@ -866,14 +992,10 @@
 
   function refreshAll() {
     renderPending().catch(() => {})
-    if (isDesktop) {
-      renderList().catch(() => {})
-      renderStats().catch(() => {})
-      return
-    }
-    const active = document.querySelector('.tab.active')?.dataset.tab
-    if (active === 'list') renderList().catch(() => {})
-    if (active === 'stats') renderStats().catch(() => {})
+    // 桌面端一次只显示一个面板：只刷新当前激活的视图（keepScroll 避免后台同步把滚动位置打回顶部）
+    const active = document.querySelector('.side-item[data-tab].active')?.dataset.tab || 'list'
+    if (active === 'list') renderList(true).catch(() => {})
+    if (active === 'stats') renderStats(true).catch(() => {})
   }
 
   // ---------- 设置 ----------
@@ -913,13 +1035,20 @@
       <h3>连接手机</h3>
       <p class="hint">用 iPhone 相机扫二维码即可自动配对（令牌免输入），扫完建议"添加到主屏幕"当 App 用。</p>
       <div id="qr-panel" class="conn-panel"></div>
-      <p class="hint">银行短信自动记账（0 点击）：<a class="link" href="/shortcut?t=${encodeURIComponent(token)}">下载快捷指令</a> → 导入后到「快捷指令 App → 自动化 → 收到信息」选择发卡银行号码并运行它。</p>
       <h3>账单导入</h3>
       <p class="hint">每 12 小时自动检查邮箱：只读取白名单发件人（微信/支付宝/银行）的账单邮件并解析入库，其他邮件一律不碰、不上传云端。也可以手动触发。</p>
       <div class="btn-row">
         <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
       </div>
       <p id="set-import-status" class="hint"></p>
+      <h3>账单核验</h3>
+      <p class="hint">导入时已留存原始账单行。核验会把账单行与账本逐行比对（缺失 / 金额不符 / 方向不符 / 疑似重复），异常项交由强模型终审（qwen3.8-flash 长文本优先，DeepSeek 托底），模型只给意见不改账。</p>
+      <div class="btn-row">
+        <input id="audit-month" type="month" class="month-input">
+        <button type="button" class="btn" id="btn-audit">🧾 核验账单</button>
+        <button type="button" class="btn hidden" id="audit-download">⬇️ 下载核验报告 CSV</button>
+      </div>
+      <p id="audit-status" class="hint"></p>
       <h3>月报提醒</h3>
       <p class="hint">每月 1 日自动把上月汇总发到邮箱（绑定微信「QQ邮箱提醒」即可在微信里收到；可加 Server酱 直推微信，见 README）。</p>
       <div class="btn-row">
@@ -983,11 +1112,43 @@
         const parts = [`新导入 ${d.imported} 条`, `跳过重复 ${d.skipped} 条`]
         if (d.merged > 0) parts.push(`LLM 合并 ${d.merged} 条`)
         if (d.passwords > 0) parts.push(`识别到 ${d.passwords} 个解压密码`)
+        if (d.mergeError) parts.push(`⚠ 合并审核失败(${d.mergeError})，新导入的请人工核对是否重复`)
         st.textContent = `✓ 完成：${parts.join('，')}${d.error ? '（' + d.error + '）' : ''}`
         refreshAll()
       } catch (e) {
         st.textContent = '✗ ' + e.message
       }
+    })
+    // 账单核验：账单行 vs 账本逐行比对 + 模型终审；报告可下载
+    $('btn-audit').addEventListener('click', async () => {
+      const st = $('audit-status')
+      const month = $('audit-month').value || localMonth()
+      $('audit-month').value = month
+      st.textContent = '核验中…（含模型终审，最长约 2 分钟）'
+      $('audit-download').classList.add('hidden')
+      try {
+        const d = (await api('/api/audit?month=' + encodeURIComponent(month))).data
+        const s = d.summary
+        const lines = [`账单行 ${s.billRows} 条：✓正常 ${s.ok}，⚠缺失 ${s.missing}，⚠不符 ${s.mismatch}；疑似重复对 ${s.dupPairs}`]
+        if (d.llm?.note) lines.push(`模型终审（${d.llm.ok ? d.llm.model : '未完成'}）：${d.llm.note}`)
+        st.textContent = lines.join('\n')
+        if (s.missing + s.mismatch + s.dupPairs > 0) $('audit-download').classList.remove('hidden')
+      } catch (e) { st.textContent = '✗ ' + e.message }
+    })
+    $('audit-download').addEventListener('click', async () => {
+      const month = $('audit-month').value || localMonth()
+      try {
+        const res = await fetch('/api/audit/export?month=' + encodeURIComponent(month), { headers: token ? { 'X-Auth-Token': token } : {} })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
+        const blob = await res.blob()
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = `pennywise-audit-${month}.csv`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+      } catch (e) { toast('下载失败：' + e.message) }
     })
     $('set-report').addEventListener('click', async () => {
       const st = $('set-report-status')
@@ -1092,6 +1253,7 @@
     if (!navigator.onLine) { updateChip(); return }
     const base = apiBase || ''
     const hdrs = token ? { 'X-Auth-Token': token } : {}
+    let changed = false // 只有账本真的变化了才刷新视图，避免每 30 秒重渲染造成"自己刷新"
     // 1) 拉取服务器增量
     const since = Number((await mGet('meta', 'rev').catch(() => null))?.v || 0)
     try {
@@ -1107,8 +1269,8 @@
             if ((p.updated_at || '') >= srvTs) continue // 本地更新 → 保留本地版本，稍后推送覆盖
             await mDel('ops', ch.uid) // 本地更旧 → 放弃本地改动
           }
-          if (ch.type === 'del') await mDel('tx', ch.uid)
-          else await mPut('tx', Object.assign({}, ch.data, { uid: ch.uid }))
+          if (ch.type === 'del') { await mDel('tx', ch.uid); changed = true }
+          else { await mPut('tx', Object.assign({}, ch.data, { uid: ch.uid })); changed = true }
         }
         await mPut('meta', { k: 'rev', v: String(j.data.rev) })
       }
@@ -1125,29 +1287,30 @@
         if (r.ok) {
           const j = await r.json()
           for (const uid of j.data.applied || []) await mDel('ops', uid)
+          if ((j.data.applied || []).length) changed = true
         }
       }
     } catch (e) { /* 稍后重试 */ }
     refreshModelAlert().catch(() => {})
     updateChip()
-    refreshAll()
+    if (changed) refreshAll()
   }
   async function updateChip() {
     const n = (await mAll('ops').catch(() => [])).length
-    const chip = $('net-chip')
+    const chips = [...document.querySelectorAll('#net-chip, #side-net')]
+    let text, cls
     if (!navigator.onLine) {
-      chip.textContent = '离线'; chip.className = 'chip chip-off'
+      text = '离线'; cls = 'chip chip-off'
     } else if (n) {
-      chip.textContent = `待同步 ${n}`; chip.className = 'chip chip-warn'
+      text = `待同步 ${n}`; cls = 'chip chip-warn'
     } else if (activeEndpoint) {
       const label = activeEndpoint.kind === 'lan' ? '局域网直连'
         : activeEndpoint.kind === 'tailscale' ? 'Tailscale' : '在线'
-      chip.textContent = label
-      chip.className = 'chip chip-ok'
+      text = label; cls = 'chip chip-ok'
     } else {
-      chip.textContent = '在线'; chip.className = 'chip chip-ok'
+      text = '在线'; cls = 'chip chip-ok'
     }
-    chip.classList.remove('hidden')
+    for (const chip of chips) { chip.textContent = text; chip.className = cls }
   }
 
   function renderConnPanel() {
@@ -1239,6 +1402,105 @@
     }
   })
 
+  // ---------- 邮箱助手：状态 + 处理动态 + 系统通知 ----------
+  const FEED_ICO = { mail: '✉️', bill: '📥', record: '💰', report: '📈', info: '🔔' }
+  function feedItem(ev) {
+    return `<div class="feed-item"><span class="feed-ico">${FEED_ICO[ev.type] || '🔔'}</span>` +
+      `<div class="feed-main"><div class="feed-title">${esc(ev.title)}</div>${ev.body ? `<div class="feed-body">${esc(ev.body)}</div>` : ''}</div>` +
+      `<span class="feed-time">${fmtTs(ev.at)}</span></div>`
+  }
+  async function refreshMailFeed() {
+    try {
+      const d = await api('/api/notify?after=0')
+      const events = d.events || []
+      $('mail-feed').innerHTML = events.map(feedItem).join('')
+      $('mail-feed-empty').classList.toggle('hidden', events.length > 0)
+    } catch (e) { /* 离线时不打扰 */ }
+  }
+  async function renderMail() {
+    try {
+      const h = await api('/api/health')
+      const bi = h.billImport || {}
+      const chip = (cls, txt) => `<span class="chip ${cls}">${txt}</span>`
+      $('mail-status-chips').innerHTML =
+        chip(bi.enabled ? 'chip-ok' : 'chip-off', bi.enabled ? '账单导入已开启' : '账单导入未开启') +
+        (bi.lastRun ? chip('chip-warn', '上次导入 ' + fmtTs(bi.lastRun)) : '')
+    } catch (e) { /* 静默 */ }
+    await refreshMailFeed()
+  }
+  // 顶栏邮箱红点：事件中心有新动态就亮；点开邮箱页即视为已读
+  const MAIL_READ_KEY = 'pw-mail-read-seq'
+  function showMailDot() {
+    document.querySelectorAll('.mail-dot').forEach((d) => d.classList.remove('hidden'))
+  }
+  function markMailRead() {
+    api('/api/notify?after=0').then((d) => {
+      localStorage.setItem(MAIL_READ_KEY, String(d.seq || 0))
+      document.querySelectorAll('.mail-dot').forEach((d) => d.classList.add('hidden'))
+    }).catch(() => { /* 离线时保留红点 */ })
+  }
+  async function checkMailDot() {
+    try {
+      const d = await api('/api/notify?after=0')
+      const read = Number(localStorage.getItem(MAIL_READ_KEY) || 0)
+      if ((d.seq || 0) > read) showMailDot()
+    } catch (e) { /* 离线不打扰 */ }
+  }
+
+  // ---------- 背景粒子装饰（点阵波浪，零依赖 canvas；尊重"减弱动态效果"，页面隐藏时暂停省电） ----------
+  function initBgFx() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    if ($('bg-fx')) return
+    const cv = document.createElement('canvas')
+    cv.id = 'bg-fx'
+    document.body.prepend(cv)
+    const ctx = cv.getContext('2d')
+    const COLORS = ['79,140,255', '34,197,94', '147,160,180'] // 主题蓝 / 主题绿 / 灰
+    let W = 0, H = 0, dots = [], hidden = false, t = Math.random() * 10000
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      W = window.innerWidth; H = window.innerHeight
+      cv.width = W * dpr; cv.height = H * dpr
+      cv.style.width = W + 'px'; cv.style.height = H + 'px'
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const n = Math.round(Math.min(110, Math.max(40, (W * H) / 26000)))
+      dots = Array.from({ length: n }, (_, i) => ({
+        x: Math.random() * W,
+        y: H * (0.04 + Math.random() * 0.55),
+        r: 0.8 + Math.random() * 1.8,
+        c: COLORS[i % COLORS.length],
+        base: 0.1 + Math.random() * 0.26,
+        ph: Math.random() * Math.PI * 2,
+        amp: 6 + Math.random() * 22,
+        sp: 0.008 + Math.random() * 0.02,
+        vx: 0.012 + Math.random() * 0.03,
+      }))
+    }
+    function tick() {
+      if (hidden) return
+      t += 1
+      ctx.clearRect(0, 0, W, H)
+      for (const d of dots) {
+        d.x -= d.vx
+        if (d.x < -8) d.x = W + 8
+        const y = d.y + Math.sin(t * d.sp + d.ph) * d.amp
+        const a = Math.max(0.04, d.base + Math.sin(t * d.sp * 1.7 + d.ph) * 0.1)
+        ctx.beginPath()
+        ctx.fillStyle = `rgba(${d.c},${a.toFixed(3)})`
+        ctx.arc(d.x, y, d.r, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      requestAnimationFrame(tick)
+    }
+    resize()
+    window.addEventListener('resize', resize)
+    document.addEventListener('visibilitychange', () => {
+      hidden = document.hidden
+      if (!hidden) requestAnimationFrame(tick)
+    })
+    requestAnimationFrame(tick)
+  }
+
   // 启动前验证：必须通过令牌校验才能进入（电脑本机与手机一视同仁，无验证不进网页）
   async function ensureUnlocked() {
     if (!token) return showLock()
@@ -1263,6 +1525,7 @@
 
   // 应用正式启动（已通过解锁验证）
   async function initApp() {
+    initBgFx()
     $('list-month').value = localMonth()
     $('stats-month').value = localMonth()
     $('list-month').addEventListener('change', renderList)
@@ -1275,6 +1538,22 @@
     try { indexedDB.deleteDatabase('pw-outbox') } catch (e) { /* 清理旧版离线队列 */ }
     refreshEndpoints().catch(() => {})
     refreshModelAlert().catch(() => {})
+    // 邮箱账单：立即导入 + 顶栏红点
+    $('mail-check').addEventListener('click', async () => {
+      const btn = $('mail-check')
+      btn.disabled = true
+      try {
+        const d = await api('/api/import-bills', { method: 'POST' })
+        toast(d.error ? `导入失败：${d.error}` : `📥 导入完成：新增 ${d.imported || 0} 笔，跳过重复 ${d.skipped || 0} 笔`)
+        await refreshMailFeed()
+        syncNow()
+      } catch (e) { toast(e.message || '导入失败') } finally { btn.disabled = false }
+    })
+    $('btn-mail').addEventListener('click', () => {
+      switchTab('mail')
+      markMailRead()
+    })
+    checkMailDot().catch(() => {})
     // 分类：在线拉取并缓存到本地，离线用缓存
     try {
       categories = await api('/api/categories')
@@ -1303,6 +1582,15 @@
           try { n = String(JSON.parse(e.data || '{}').imported || '') } catch { /* 忽略 */ }
           toast(n ? `📥 月度账单已导入 ${n} 笔，账本已更新` : '📥 月度账单已导入，账本已更新')
           syncNow()
+        })
+        // 事件中心：账单导入等动态 → 红点提示 + 页内 toast + 动态刷新
+        es.addEventListener('notify', (e) => {
+          let ev = null
+          try { ev = JSON.parse(e.data || 'null') } catch { /* 忽略 */ }
+          if (!ev) return
+          toast(`${ev.title}${ev.body ? '：' + ev.body : ''}`, 3600)
+          showMailDot()
+          refreshMailFeed().catch(() => {})
         })
       } catch { /* 不支持事件流时依赖 30 秒同步轮询 */ }
     }
