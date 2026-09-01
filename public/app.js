@@ -193,12 +193,12 @@
   }
   mqDesktop.addEventListener('change', applyLayout)
 
-  const TAB_RENDER = { list: renderList, stats: renderStats, mail: renderMail }
+  const TAB_RENDER = { list: renderList, stats: renderStats, mail: renderMail, fin: renderFin }
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     document.querySelectorAll('.side-item[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     if (name === 'mail') markMailRead() // 任何入口（侧栏/顶栏）打开邮箱页都算已读
-    ;['list', 'stats', 'mail'].forEach((t) => {
+    ;['list', 'stats', 'mail', 'fin'].forEach((t) => {
       const el = $(`tab-${t}`)
       el.hidden = t !== name
       el.classList.remove('tab-enter')
@@ -678,9 +678,7 @@
       <div class="stat-card"><div class="stat-num" data-cnt="${s.count}" data-sign="" data-dec="0">${s.count}</div><div class="stat-label">笔数</div></div>`
     requestAnimationFrame(() => { runCountUps(); if (scroller && keepScroll) scroller.scrollTop = st })
     renderStatsExtra(s)
-    renderBudget(month)
     renderRecs(month)
-    renderFinance(month).catch(() => {})
     renderMerchants(month).catch(() => {})
   }
 
@@ -818,10 +816,6 @@
     const topInc = (s.topIncomes || []).map((t, i) => `
       <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.note ? ' · ' + esc(t.note) : ''}</span><b class="income">+${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
     $('stats-extra').innerHTML = `
-      <div class="stat-block" id="fin-block">
-        <div class="stat-block-title">💰 理财（50/30/20）</div>
-        <p class="empty">加载中…</p>
-      </div>
       <div class="stat-block" id="merchant-block">
         <div class="stat-block-title">🏪 钱花在哪个商家（本月）</div>
         <p class="empty">加载中…</p>
@@ -860,10 +854,11 @@
     requestAnimationFrame(runCountUps)
   }
 
-  // 理财卡片：50/30/20 法则（必要/想要/储蓄占收入比）+ 先存后花日可花 + 信封预算总览
-  async function renderFinance(month) {
+  // 理财页：50/30/20 法则（必要/想要/储蓄占收入比）+ 先存后花日可花 + 信封预算总览
+  async function renderFin() {
     const el = $('fin-block')
     if (!el) return
+    const month = $('fin-month').value || localMonth()
     try {
       const d = (await api('/api/finance?month=' + encodeURIComponent(month))).data
       const line = (label, v, p, target, invert, cls) => {
@@ -880,18 +875,19 @@
         ? '<p class="fin-safe dim">先记一笔本月收入，才能算"今天还能花多少"（先存后花）</p>'
         : `<p class="fin-safe">今天还能花 <b class="expense">¥${fmtMoney(d.safeToday)}</b> · 本月剩 ${d.daysLeft} 天 <span class="dim">（先存后花：按收入 80% 摊到剩余每天）</span></p>`
       const budget = d.budgetTotal > 0
-        ? `信封预算已用 <b class="${d.expense > d.budgetTotal ? 'expense' : 'income'}">${Math.round((d.expense / d.budgetTotal) * 100)}%</b>（¥${fmtMoney(d.expense)} / ¥${fmtMoney(d.budgetTotal)}）`
-        : '未设置信封预算：用下方「预算」模块给分类设限额（可一键生成本月实际）'
+        ? `信封预算已用 <b class="${d.expense > d.budgetTotal ? 'expense' : 'income'}">${Math.round((d.expense / d.budgetTotal) * 100)}%</b>（¥${fmtMoney(d.expense)} / ¥${fmtMoney(d.budgetTotal)}）· 明细见下方信封`
+        : '未设置信封预算：用下方编辑器给分类设限额（可一键生成本月实际）'
       const savCls = d.savings.total < 0 ? 'expense' : 'income'
       el.innerHTML = `
-        <div class="stat-block-title">💰 理财（50/30/20）<span class="m-total">储蓄率 ${d.savings.rate === null ? '—' : d.savings.rate + '%'}</span></div>
+        <div class="stat-block-title">50/30/20（必要 ≤50% · 想要 ≤30% · 储蓄 ≥20%）<span class="m-total">储蓄率 ${d.savings.rate === null ? '—' : d.savings.rate + '%'}</span></div>
         ${line('🥗 必要支出', d.needs.total, d.needs.pct, 50, false, 'expense')}
         ${line('🛍️ 想要支出', d.wants.total, d.wants.pct, 30, false, 'expense')}
         ${line('🐷 储蓄（结余）', d.savings.total, d.savings.rate, 20, true, savCls)}
         ${safe}
         <p class="hint" style="margin:8px 0 0">✉️ ${budget}</p>`
+      renderBudget(month)
     } catch (e) {
-      el.innerHTML = `<div class="stat-block-title">💰 理财（50/30/20）</div><p class="empty">加载失败：${esc(e.message)}</p>`
+      el.innerHTML = `<div class="stat-block-title">50/30/20（必要 ≤50% · 想要 ≤30% · 储蓄 ≥20%）</div><p class="empty">加载失败：${esc(e.message)}</p>`
     }
   }
 
@@ -1013,15 +1009,15 @@
       if (!category) return toast('请选择分类')
       if (!Number.isFinite(limit) || limit <= 0) return toast('请输入正确的限额')
       try {
-        await api('/api/budgets', { method: 'PUT', body: { month: $('stats-month').value || localMonth(), category, limit } })
+        await api('/api/budgets', { method: 'PUT', body: { month: $('fin-month').value || localMonth(), category, limit } })
         $('bud-limit').value = ''
         toast('预算已保存')
-        renderBudget($('stats-month').value || localMonth())
+        renderBudget($('fin-month').value || localMonth())
       } catch (e) { toast('保存失败：' + e.message) }
     })
     // 按本月实际支出一键生成预算（>50 元向上取整到十位，避免零碎数字）
     $('bud-auto').addEventListener('click', async () => {
-      const month = $('stats-month').value || localMonth()
+      const month = $('fin-month').value || localMonth()
       try {
         const s = await api('/api/summary?month=' + encodeURIComponent(month))
         const cats = (s.byCategory || []).filter((c) => c.total > 0)
@@ -1039,9 +1035,9 @@
       const row = e.target.closest('.cat-row')
       if (!row || !confirm('删除这个预算？')) return
       try {
-        await api('/api/budgets?month=' + encodeURIComponent($('stats-month').value || localMonth()) + '&category=' + encodeURIComponent(row.dataset.cat), { method: 'DELETE' })
+        await api('/api/budgets?month=' + encodeURIComponent($('fin-month').value || localMonth()) + '&category=' + encodeURIComponent(row.dataset.cat), { method: 'DELETE' })
         toast('已删除')
-        renderBudget($('stats-month').value || localMonth())
+        renderBudget($('fin-month').value || localMonth())
       } catch (err) { toast('删除失败：' + err.message) }
     })
   }
@@ -1052,6 +1048,7 @@
     const active = document.querySelector('.side-item[data-tab].active')?.dataset.tab || 'list'
     if (active === 'list') renderList(true).catch(() => {})
     if (active === 'stats') renderStats(true).catch(() => {})
+    if (active === 'fin') renderFin().catch(() => {})
   }
 
   // ---------- 设置 ----------
@@ -1584,8 +1581,10 @@
     initBgFx()
     $('list-month').value = localMonth()
     $('stats-month').value = localMonth()
+    $('fin-month').value = localMonth()
     $('list-month').addEventListener('change', renderList)
     $('stats-month').addEventListener('change', renderStats)
+    $('fin-month').addEventListener('change', renderFin)
     let deb
     $('list-q').addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(renderList, 400) })
     $('modal').addEventListener('click', (e) => {

@@ -17,11 +17,12 @@
   <aside id="sidebar" class="sidebar">
     <div class="side-logo">
       <span class="logo-mark">💰</span>
-      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v41</span></div>
+      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v42</span></div>
     </div>
     <nav class="side-nav">
       <button class="side-item active" data-tab="list"><span class="side-ico">📄</span><span>流水</span></button>
       <button class="side-item" data-tab="stats"><span class="side-ico">📊</span><span>统计</span></button>
+      <button class="side-item" data-tab="fin"><span class="side-ico">💰</span><span>理财</span></button>
       <button class="side-item" data-tab="mail"><span class="side-ico">📬</span><span>邮箱账单</span><span class="mail-dot hidden"></span></button>
       <button class="side-item" id="side-chat"><span class="side-ico">🤖</span><span>AI 助手</span></button>
     </nav>
@@ -32,7 +33,7 @@
   </aside>
 
   <header class="topbar">
-    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v41</span></div>
+    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v42</span></div>
     <div class="topbar-right">
       <span id="net-chip" class="chip chip-ok hidden">在线</span>
       <button id="btn-mail" class="icon-btn mail-btn" title="邮箱动态">📬<span id="mail-dot" class="mail-dot hidden"></span></button>
@@ -67,7 +68,21 @@
       <div class="panel-scroll">
         <div id="stats-cards" class="stats-cards"></div>
         <div id="stats-extra"></div>
-        <h3>预算（本月）</h3>
+      </div>
+    </section>
+
+    <!-- 理财：50/30/20 + 先存后花 + 信封预算 -->
+    <section id="tab-fin" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">💰 理财</h2>
+        <input id="fin-month" type="month" class="month-input">
+      </div>
+      <div class="panel-scroll">
+        <div class="stat-block" id="fin-block">
+          <div class="stat-block-title">50/30/20（必要 ≤50% · 想要 ≤30% · 储蓄 ≥20%）</div>
+          <p class="empty">加载中…</p>
+        </div>
+        <h3>信封预算（给每个分类设限额，花超会标红）</h3>
         <div class="btn-row">
           <select id="bud-cat"></select>
           <input id="bud-limit" type="number" step="0.01" min="0.01" inputmode="decimal" placeholder="限额（元）">
@@ -77,6 +92,7 @@
           <button id="bud-auto" class="btn">⚡ 按本月实际一键生成</button>
         </div>
         <div id="budget-list"></div>
+        <p class="hint">信封预算法：月初把每个分类的"信封"装好钱，花超的信封立刻可见。上面的"今天还能花"按收入 80% 摊到剩余每天（先存后花）。</p>
       </div>
     </section>
 
@@ -122,6 +138,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="list"><span class="tab-ico">📄</span><span>流水</span></button>
     <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
+    <button class="tab" data-tab="fin"><span class="tab-ico">💰</span><span>理财</span></button>
     <button class="tab" data-tab="mail"><span class="tab-ico">📬</span><span>邮箱</span></button>
   </nav>
 
