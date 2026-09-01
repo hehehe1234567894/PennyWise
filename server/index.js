@@ -327,6 +327,43 @@ app.get('/api/notify', (req, res) => {
 })
 
 // ---- 预算（借鉴 Firefly/Actual：月度分类限额 + 进度跟踪） ----
+// ---- 理财健康度：50/30/20 法则 + 先存后花日可花 + 信封预算总览 ----
+const FIN_NEEDS = new Set(['餐饮', '交通', '日用品', '医疗', '通讯', '生活缴费', '住宿'])
+const FIN_WANTS = new Set(['购物', '娱乐', '运动', '人情', '学习'])
+app.get('/api/finance', (req, res) => {
+  const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
+  const s = summarizeMonth(month)
+  let needs = 0, wants = 0
+  for (const c of s.byCategory || []) {
+    if (FIN_NEEDS.has(c.name)) needs += Number(c.total) || 0
+    else if (FIN_WANTS.has(c.name)) wants += Number(c.total) || 0
+  }
+  const expense = Number(s.expense) || 0
+  const income = Number(s.income) || 0
+  const other = Math.max(0, expense - needs - wants) // 未分类等
+  const pctOfIncome = (v) => income > 0 ? Math.round((v / income) * 100) : null
+  const savings = income - expense
+  const savingsRate = income > 0 ? Math.round((savings / income) * 100) : null
+  // 先存后花：本月剩余每天可花 =（收入×80% − 已花）÷ 剩余天数（含今天），负数取 0
+  const now = new Date()
+  const isCurrent = month === currentMonth()
+  const daysInMonth = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()
+  const daysLeft = isCurrent ? daysInMonth - now.getDate() + 1 : daysInMonth
+  const safeToday = isCurrent && income > 0 && daysLeft > 0
+    ? Math.max(0, Math.floor(((income * 0.8 - expense) / daysLeft) * 100) / 100)
+    : null
+  const budgetTotal = Number(db.prepare('SELECT COALESCE(SUM(limit_amount), 0) AS lim FROM budgets WHERE month = ?').get(month)?.lim) || 0
+  res.json({ ok: true, data: {
+    month,
+    needs: { total: Math.round(needs * 100) / 100, pct: pctOfIncome(needs), target: 50 },
+    wants: { total: Math.round(wants * 100) / 100, pct: pctOfIncome(wants), target: 30 },
+    other: { total: Math.round(other * 100) / 100, pct: pctOfIncome(other) },
+    savings: { total: Math.round(savings * 100) / 100, rate: savingsRate, target: 20 },
+    income: Math.round(income * 100) / 100, expense: Math.round(expense * 100) / 100,
+    safeToday, daysLeft, budgetTotal,
+  } })
+})
+
 app.get('/api/budgets', (req, res) => {
   const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : currentMonth()
   const rows = db.prepare(`

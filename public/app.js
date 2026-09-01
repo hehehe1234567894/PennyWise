@@ -664,6 +664,7 @@
     renderStatsExtra(s)
     renderBudget(month)
     renderRecs(month)
+    renderFinance(month).catch(() => {})
     renderMerchants(month).catch(() => {})
   }
 
@@ -801,6 +802,10 @@
     const topInc = (s.topIncomes || []).map((t, i) => `
       <div class="top-row"><span class="top-rank">${i + 1}</span><span class="top-name">${esc(t.merchant || '（无商户）')}${t.note ? ' · ' + esc(t.note) : ''}</span><b class="income">+${fmtMoney(t.amount)}</b></div>`).join('') || '<p class="empty">暂无</p>'
     $('stats-extra').innerHTML = `
+      <div class="stat-block" id="fin-block">
+        <div class="stat-block-title">💰 理财（50/30/20）</div>
+        <p class="empty">加载中…</p>
+      </div>
       <div class="stat-block" id="merchant-block">
         <div class="stat-block-title">🏪 钱花在哪个商家（本月）</div>
         <p class="empty">加载中…</p>
@@ -837,6 +842,41 @@
         <p class="empty">分析中…（首次联网搜索需要一点时间）</p>
       </div>`
     requestAnimationFrame(runCountUps)
+  }
+
+  // 理财卡片：50/30/20 法则（必要/想要/储蓄占收入比）+ 先存后花日可花 + 信封预算总览
+  async function renderFinance(month) {
+    const el = $('fin-block')
+    if (!el) return
+    try {
+      const d = (await api('/api/finance?month=' + encodeURIComponent(month))).data
+      const line = (label, v, p, target, invert, cls) => {
+        const pTxt = p === null ? '（先记一笔本月收入）' : `${p}%（目标${invert ? '≥' : '≤'}${target}%）`
+        const good = p === null ? null : (invert ? p >= target : p <= target)
+        const flag = good === null ? '' : ` <span class="${good ? 'fin-ok' : 'fin-bad'}">${good ? '✓ 达标' : '⚠ 超标'}</span>`
+        const w = Math.max(3, Math.min(100, p === null ? 3 : p))
+        return `<div class="fin-row">
+          <div class="fin-head"><span>${label}</span><span><b class="${cls}">¥${fmtMoney(v)}</b> · ${pTxt}${flag}</span></div>
+          <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${w}%"></div></div>
+        </div>`
+      }
+      const safe = d.safeToday === null
+        ? '<p class="fin-safe dim">先记一笔本月收入，才能算"今天还能花多少"（先存后花）</p>'
+        : `<p class="fin-safe">今天还能花 <b class="expense">¥${fmtMoney(d.safeToday)}</b> · 本月剩 ${d.daysLeft} 天 <span class="dim">（先存后花：按收入 80% 摊到剩余每天）</span></p>`
+      const budget = d.budgetTotal > 0
+        ? `信封预算已用 <b class="${d.expense > d.budgetTotal ? 'expense' : 'income'}">${Math.round((d.expense / d.budgetTotal) * 100)}%</b>（¥${fmtMoney(d.expense)} / ¥${fmtMoney(d.budgetTotal)}）`
+        : '未设置信封预算：用下方「预算」模块给分类设限额（可一键生成本月实际）'
+      const savCls = d.savings.total < 0 ? 'expense' : 'income'
+      el.innerHTML = `
+        <div class="stat-block-title">💰 理财（50/30/20）<span class="m-total">储蓄率 ${d.savings.rate === null ? '—' : d.savings.rate + '%'}</span></div>
+        ${line('🥗 必要支出', d.needs.total, d.needs.pct, 50, false, 'expense')}
+        ${line('🛍️ 想要支出', d.wants.total, d.wants.pct, 30, false, 'expense')}
+        ${line('🐷 储蓄（结余）', d.savings.total, d.savings.rate, 20, true, savCls)}
+        ${safe}
+        <p class="hint" style="margin:8px 0 0">✉️ ${budget}</p>`
+    } catch (e) {
+      el.innerHTML = `<div class="stat-block-title">💰 理财（50/30/20）</div><p class="empty">加载失败：${esc(e.message)}</p>`
+    }
   }
 
   // 商家维度月度排行（服务端聚合 + 上月环比；点击商家 → 流水按该商家过滤）

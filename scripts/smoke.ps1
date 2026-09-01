@@ -86,6 +86,9 @@ $auCode = curl.exe -s -o NUL -w '%{http_code}' --max-time 30 "$base/api/audit?mo
 Check 'audit requires token (401)' ($auCode -eq '401')
 $au = Call GET '/api/audit?month=2000-01'
 Check 'audit endpoint (empty month)' ($au.ok -and $au.data.summary.billRows -eq 0)
+# 理财健康度（空月份：income=0 → pct/rate/safeToday 均为 null）
+$fin = Call GET '/api/finance?month=2000-01'
+Check 'finance endpoint (empty month)' ($fin.ok -and $null -eq $fin.data.savings.rate -and $null -eq $fin.data.safeToday -and $fin.data.needs.target -eq 50)
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }

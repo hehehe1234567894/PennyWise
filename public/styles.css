@@ -254,6 +254,14 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 }
 .stat-block-title { font-size: 12px; color: var(--dim); margin-bottom: 10px; font-weight: 600; letter-spacing: .2px; }
 
+/* 理财卡片（50/30/20） */
+.fin-row { margin: 10px 0; }
+.fin-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--text); margin-bottom: 5px; }
+.fin-head span:first-child { color: var(--dim); }
+.fin-ok { color: #22c55e; font-weight: 600; font-size: 12px; }
+.fin-bad { color: #ef4444; font-weight: 600; font-size: 12px; }
+.fin-safe { font-size: 14px; margin: 12px 0 0; }
+
 /* 环形图（竖排：环图在上，图例在下） */
 .donut-wrap { display: flex; flex-direction: column; gap: 14px; align-items: center; }
 .donut {
