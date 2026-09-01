@@ -633,6 +633,15 @@
       </div>`
     }).join('')
     $('list-empty').classList.toggle('hidden', items.length > 0)
+    if (!items.length) {
+      // 空月防虚惊：找最近一个有记录的月份，给一键跳转（月初默认显示当前月，易误以为记录丢了）
+      const months = [...new Set(all.map((t) => String(t.ts || '').slice(0, 7)))].filter((m) => m && m < month).sort()
+      const prev = months[months.length - 1]
+      const n = prev ? all.filter((t) => String(t.ts || '').startsWith(prev)).length : 0
+      $('list-empty').innerHTML = prev && n
+        ? `这个月还没有记录 · ${prev.slice(0, 4)} 年 ${Number(prev.slice(5, 7))} 月有 ${n} 笔<br><button type="button" class="btn btn-small" id="empty-prev" data-month="${prev}" style="margin-top:10px">查看 ${prev}</button>`
+        : '这个月还没有记录'
+    }
     const s = localSummary(all, month)
     $('list-summary').innerHTML = `
       <span>收入 <b class="income">+${fmtMoney(s.income)}</b></span>
@@ -647,6 +656,13 @@
     if (!card) return
     const tx = lastListItems.find((t) => t.uid === card.dataset.id)
     if (tx) openEditor('edit', tx)
+  })
+  // 空月提示里的"查看上月"跳转（容器常驻，innerHTML 更新不影响监听）
+  $('list-empty').addEventListener('click', (e) => {
+    const b = e.target.closest('#empty-prev')
+    if (!b) return
+    $('list-month').value = b.dataset.month
+    renderList().catch(() => {})
   })
 
   async function renderStats(keepScroll = false) {
