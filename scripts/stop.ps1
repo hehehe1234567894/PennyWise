@@ -1,4 +1,4 @@
-# PennyWise stop script (ASCII-only so it runs under Windows PowerShell 5.1).
+﻿# PennyWise stop script (ASCII-only so it runs under Windows PowerShell 5.1).
 # Stops the ledger server: first by data/server.pid, then by scanning port 8720 as fallback.
 # Other Node programs (e.g. the agent harness) are never touched.
 $ErrorActionPreference = 'SilentlyContinue'
