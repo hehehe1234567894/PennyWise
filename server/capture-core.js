@@ -6,7 +6,7 @@ import { db, ruleFor, nowIso, getTx, newUid, nextRev } from './db.js'
 import { parseCapture, parseImage } from './llm.js'
 
 // ================= 采集核心（文本/图片 → 解析 → 规则记忆 → 自动入账） =================
-// 供 /api/capture、/api/capture-image、/api/sms、邮箱记账共用
+// 供 /api/capture、/api/capture-image 共用
 
 const IMAGE_DIR = path.join(DATA_DIR, 'images')
 const IMAGE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/bmp': 'bmp', 'image/webp': 'webp' }

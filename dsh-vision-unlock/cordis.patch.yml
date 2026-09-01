@@ -1,0 +1,25 @@
+# dsh-vision-unlock bundle patch（bundle 模式用）
+#
+# 用法二选一（不要同时用，避免重复 insert 同一个 id）：
+#   A. bundle 模式：把本包目录放入 <profile>/node_modules/@local/，
+#      并在 <profile>/package.json 的 dsh.profile.bundles 里加 "@local/dsh-vision-unlock"。
+#      → 本文件即生效。
+#   B. 免改 manifest 模式（推荐，支持热重载）：把本包目录放入
+#      <profile>/node_modules/@local/ 后，把下面这段 insert 原样追加到
+#      <profile>/cordis.patch.yml（用户 patch 层）。
+#
+# 叠加顺序：bundle 层 → 用户 patch 层 → --patch；用户层可用
+# `- id: vision-unlock, config: {...}` 覆盖下方默认配置。
+
+- insert:
+    - id: vision-unlock
+      name: '@local/dsh-vision-unlock'
+      config:
+        enabled: true
+        verbose: true
+        models:
+          # 默认条目：智谱 GLM-5.3-Flash（官方原生多模态，但元数据常缺图片声明）
+          # 其它模型照抄一行改 id 即可；model 支持 * 通配（如 'glm-*'、'*'）
+          - provider: '*'
+            model: 'glm-5.3-flash'
+            input: [text, image]

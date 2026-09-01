@@ -3,6 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { DATA_DIR } from './env.js'
+
 import { DEFAULT_CATEGORIES } from './categories.js'
 
 fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -74,6 +75,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_uid ON transactions(uid) WHERE uid IS N
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_ext ON transactions(ext_id) WHERE ext_id IS NOT NULL AND ext_id != '';
 CREATE TABLE IF NOT EXISTS tombstones (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+`)
+// v5 账单核验：留存原始账单行（导入时的"呈堂证供"），供事后对账核验
+db.exec(`
+CREATE TABLE IF NOT EXISTS bill_rows (
+  ext_id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  amount REAL NOT NULL,
+  direction TEXT NOT NULL,
+  merchant TEXT NOT NULL DEFAULT '',
+  goods_name TEXT NOT NULL DEFAULT '',
+  account TEXT NOT NULL DEFAULT '',
+  raw_text TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT 'inserted',   -- merged / inserted
+  match_tx_id INTEGER,                        -- 合并时挂到的账本记录 id
+  match_tx_uid TEXT,
+  imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bill_ts ON bill_rows(ts);
 `)
 // 回填历史数据：分配 uid 与 rev，让存量账本可同步
 let rev = Number(db.prepare("SELECT v FROM meta WHERE k='rev'").get()?.v ?? 0)

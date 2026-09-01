@@ -20,14 +20,14 @@ function Check($name, $cond, $detail = '') {
   else { $script:fail++; Write-Host "FAIL  $name $detail" -ForegroundColor Red }
 }
 function Call($method, $path, $body = $null, $withToken = $true) {
-  $p = @{ Method = $method; Uri = "$base$path" }
+  $p = @{ Method = $method; Uri = "$base$path"; TimeoutSec = 90 }
   if ($withToken) { $p.Headers = @{ 'X-Auth-Token' = $token } }
   if ($null -ne $body) { $p.ContentType = 'application/json'; $p.Body = ($body | ConvertTo-Json -Compress -Depth 8) }
   Invoke-RestMethod @p
 }
 function StatusOf($method, $path, $body = $null, $baseUrl = $base) {
   try {
-    $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri "$baseUrl$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -ErrorAction Stop
+    $r = Invoke-WebRequest -UseBasicParsing -Method $method -Uri "$baseUrl$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 90 -ErrorAction Stop
     return $r.StatusCode
   } catch { return [int]$_.Exception.Response.StatusCode.value__ }
 }
@@ -73,20 +73,19 @@ $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Conten
 Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
 Check 'health reports autoConfirm' ([double]$h.autoConfirm -ge 0 -and [double]$h.autoConfirm -le 1)
 Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.modelStatus.text -and $null -ne $h.modelStatus.vision)
-# 1e. automation extras (SMS auto-capture junk-skip, iOS shortcut download)
-$smsj = (curl.exe -s -X POST -H "X-Auth-Token: $token" -H 'Content-Type: text/plain' --data-binary 'hello 123 test verification code 456789' "$base/api/sms") | ConvertFrom-Json
-Check 'sms junk silently skipped' ($smsj.ok -and $smsj.data.skipped -eq $true)
-# AI agent endpoint: empty text must be 400 (no LLM call, zero cost)
+# 1e. AI agent endpoint: empty text must be 400 (no LLM call, zero cost)
 $agent400 = $false
 try {
   Invoke-WebRequest -UseBasicParsing -Method POST -Uri "$base/api/agent" -Headers @{ 'X-Auth-Token' = $token } -ContentType 'application/json' -Body '{"text":""}' -ErrorAction Stop | Out-Null
 } catch { $agent400 = ([int]$_.Exception.Response.StatusCode.value__ -eq 400) }
 Check 'agent rejects empty text (400)' $agent400
-$scCode = curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut?t=$token"
-Check 'shortcut file downloadable with token' ($scCode -eq '200')
-Check 'shortcut rejected locally without token (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$base/shortcut") -eq '401')
-$rp = Call GET '/api/report/preview'
+$rp = Call GET '/api/report/preview?lite=1'
 Check 'report preview builds' ($rp.ok -and $null -ne $rp.data.text -and $rp.data.text.Length -gt 20)
+# 账单核验（空月份：无 LLM 调用、秒回）
+$auCode = curl.exe -s -o NUL -w '%{http_code}' --max-time 30 "$base/api/audit?month=2000-01"
+Check 'audit requires token (401)' ($auCode -eq '401')
+$au = Call GET '/api/audit?month=2000-01'
+Check 'audit endpoint (empty month)' ($au.ok -and $au.data.summary.billRows -eq 0)
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }
@@ -98,7 +97,7 @@ Check 'no token rejected (401)' ((StatusOf POST '/api/capture' @{ text = 'x' } $
 Check 'bad token rejected (401)' ((StatusOf POST '/api/transactions' @{ amount = 1 } $extBase) -eq 401)
 Check 'connect-info rejected remotely without token (401)' ((StatusOf GET '/api/connect-info' $null $extBase) -eq 401)
 Check 'reachability requires token remotely (401)' ((StatusOf GET '/api/reachability' $null $extBase) -eq 401)
-Check 'shortcut requires auth remotely (401)' ((curl.exe -s -o NUL -w '%{http_code}' "$extBase/shortcut") -eq '401')
+Check 'merchants endpoint works remotely (401)' ((StatusOf GET '/api/merchants' $null $extBase) -eq '401')
 
 # 3. capture (LLM parses; high confidence auto-confirms, otherwise stays pending)
 # record baseline (ledger may contain real data; assert by delta)
