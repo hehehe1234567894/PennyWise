@@ -1,4 +1,4 @@
-# PennyWise smoke test (ASCII-only so it runs under Windows PowerShell 5.1)
+﻿# PennyWise smoke test (ASCII-only so it runs under Windows PowerShell 5.1)
 #
 # Run after the server is up:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1
