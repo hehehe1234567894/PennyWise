@@ -8,7 +8,12 @@ $pidFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'data\server.pid'
 if (Test-Path $pidFile) {
   $p = [int](Get-Content $pidFile)
   $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
-  if ($proc) { Stop-Process -Id $p -Force; Write-Host "PennyWise stopped (pid $p)"; $stopped = $true }
+  if ($proc) {
+    # stale-pid guard: only kill it if it is really a node process (pid files can go stale
+    # and Windows may have reused the pid for something else entirely)
+    if ($proc.ProcessName -eq 'node') { Stop-Process -Id $p -Force; Write-Host "PennyWise stopped (pid $p)"; $stopped = $true }
+    else { Write-Host "server.pid ($p) is $($proc.ProcessName), not node - stale, skipping" }
+  }
   Remove-Item $pidFile
 }
 # fallback: whoever is listening on the port is the ledger server
