@@ -20,6 +20,10 @@ import { pushEvent, recentEvents, onEvent } from './notify.js'
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
 
+// 幽灵模式节流：账本是后台服务，降到低于正常优先级——45 天邮件重扫、LLM 解析等
+// 突发负载永远不抢前台应用的 CPU（沙箱/受限环境里外部改优先级会被拒，自设最可靠）
+try { os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* 忽略 */ }
+
 // 自动入账阈值：解析置信度 ≥ 阈值 → 直接入账，无需确认；1 = 全部手动确认
 function autoConfirmAt() {
   return autoConfirmFrom(env('AUTO_CONFIRM', '0.9'))
@@ -28,6 +32,19 @@ function autoConfirmAt() {
 const app = express()
 app.disable('x-powered-by')
 app.use(express.json({ limit: '16mb' }))
+
+// ---- 幽灵模式活动心跳：记录最近一次 HTTP 请求时间（ghost.ps1 据此判断何时可自动停服） ----
+let lastActivitySaved = 0
+app.use((req, res, next) => {
+  if (req.path !== '/api/events') { // SSE 长连接单独用活动连接数判断
+    const t = Date.now()
+    if (t - lastActivitySaved > 60000) { // 节流：每分钟最多落盘一次
+      lastActivitySaved = t
+      try { fs.writeFileSync(path.join(DATA_DIR, 'last-activity.txt'), String(t)) } catch { /* 忽略 */ }
+    }
+  }
+  next()
+})
 
 // ---- 安全响应头 ----
 app.use((req, res, next) => {
@@ -100,7 +117,7 @@ app.use('/api', (req, res, next) => {
 })
 
 // ---- 鉴权：/api 下公开端点除外，其余一律要求 X-Auth-Token（本机/远程一视同仁，无验证不可进入） ----
-const PUBLIC_API = ['/qr', '/events']
+const PUBLIC_API = ['/qr', '/events', '/health'] // /health 公开：桌面启动器/看门狗用它做无凭据探活
 function tokenOk(a, b) {
   const ba = Buffer.from(String(a))
   const bb = Buffer.from(String(b))
@@ -262,6 +279,8 @@ async function runBillImport() {
   try {
     const r = await importBills(mailConfig())
     billStatus.lastRun = nowIso()
+    // 幽灵模式防抖：记录每次导入尝试时间（成功与否都算），启动补扫据此跳过 6 小时内的重复扫描
+    try { db.prepare("INSERT INTO meta (k, v) VALUES ('last_import_attempt', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(Date.now())) } catch { /* 忽略 */ }
     billStatus.imported = r.imported
     billStatus.skipped = r.skipped
     billStatus.merged = r.merged || 0
@@ -283,6 +302,7 @@ async function runBillImport() {
     return r
   } catch (e) {
     billStatus.lastRun = nowIso()
+    try { db.prepare("INSERT INTO meta (k, v) VALUES ('last_import_attempt', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(Date.now())) } catch { /* 忽略 */ }
     billStatus.error = String(e?.message || e).slice(0, 200)
     return { imported: 0, skipped: 0, passwords: 0, error: billStatus.error }
   }
@@ -809,9 +829,14 @@ app.use((err, req, res, next) => {
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
-  // 账单邮件自动导入：配置后启动 15 秒首次执行，此后每 12 小时一次（只读白名单发件人）
+  // 账单邮件自动导入：启动 15 秒首次执行，此后每 12 小时一次（只读白名单发件人）。
+  // 防抖：导入会重扫近 45 天邮件（下载+解析+LLM），距上次尝试不足 6 小时的重启跳过补扫，
+  // 否则"看门狗误判→重启→再扫一遍"的重启风暴会反复烧 CPU 和 LLM 调用。
   if (mailConfig().billsEnabled) {
-    setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
+    const lastAttempt = Number(db.prepare("SELECT v FROM meta WHERE k = 'last_import_attempt'").get()?.v || 0)
+    if (Date.now() - lastAttempt > 6 * 3600 * 1000) {
+      setTimeout(() => { runBillImport().catch(() => {}) }, 15000)
+    }
     setInterval(() => { runBillImport().catch(() => {}) }, 12 * 3600 * 1000)
   }
   // 月度报告：每 30 分钟检查一次是否到发送时刻

@@ -20,10 +20,21 @@ function Check($name, $cond, $detail = '') {
   else { $script:fail++; Write-Host "FAIL  $name $detail" -ForegroundColor Red }
 }
 function Call($method, $path, $body = $null, $withToken = $true) {
-  $p = @{ Method = $method; Uri = "$base$path"; TimeoutSec = 90 }
-  if ($withToken) { $p.Headers = @{ 'X-Auth-Token' = $token } }
-  if ($null -ne $body) { $p.ContentType = 'application/json'; $p.Body = ($body | ConvertTo-Json -Compress -Depth 8) }
-  Invoke-RestMethod @p
+  # Node closes idle keep-alive connections after 5s; PS 5.1 sometimes surfaces that as a
+  # thrown WebException or an empty 200 body. Every endpoint this test calls is idempotent
+  # (capture client_id / sync uid / PUT upsert / DELETE tombstone), so one retry is safe.
+  for ($try = 1; $try -le 2; $try++) {
+    try {
+      $p = @{ Method = $method; Uri = "$base$path"; TimeoutSec = 90 }
+      if ($withToken) { $p.Headers = @{ 'X-Auth-Token' = $token } }
+      if ($null -ne $body) { $p.ContentType = 'application/json'; $p.Body = ($body | ConvertTo-Json -Compress -Depth 8) }
+      $r = Invoke-RestMethod @p
+      if ($null -ne $r) { return $r }
+    } catch {
+      if ($try -eq 2) { throw }
+    }
+    Start-Sleep -Milliseconds 300
+  }
 }
 function StatusOf($method, $path, $body = $null, $baseUrl = $base) {
   try {
@@ -40,7 +51,7 @@ try {
 } catch { }
 
 # 1. endpoints: everything except /qr requires token (local or remote)
-Check 'health requires token (401)' ((StatusOf GET '/api/health') -eq 401)
+Check 'health public for liveness probe (200)' ((StatusOf GET '/api/health') -eq 200)
 $h = Call GET '/api/health'
 Check 'health endpoint' ($h.ok -eq $true)
 Check 'config requires token (401)' ((StatusOf GET '/api/config') -eq 401)
@@ -88,7 +99,16 @@ $au = Call GET '/api/audit?month=2000-01'
 Check 'audit endpoint (empty month)' ($au.ok -and $au.data.summary.billRows -eq 0)
 # 理财健康度（空月份：income=0 → pct/rate/safeToday 均为 null）
 $fin = Call GET '/api/finance?month=2000-01'
-Check 'finance endpoint (empty month)' ($fin.ok -and $null -eq $fin.data.savings.rate -and $null -eq $fin.data.safeToday -and $fin.data.needs.target -eq 50)
+if (-not $fin.ok) {
+  try {
+    $w = Invoke-WebRequest -UseBasicParsing -Uri "$base/api/finance?month=2000-01" -Headers @{ 'X-Auth-Token' = $token } -ErrorAction Stop
+    $raw = "$($w.Content)"
+    $dbg = if ($raw.Length -gt 150) { $raw.Substring(0, 150) } else { $raw }
+    Write-Host ("DEBUG finance raw: status={0} len={1} body={2}" -f $w.StatusCode, $raw.Length, ($dbg -replace '\s+', ' '))
+  } catch { Write-Host "DEBUG finance raw IWR threw: $($_.Exception.Message)" }
+}
+$finOk = [bool]$fin.ok; $finRateNull = ($null -eq $fin.data.savings.rate); $finSafeNull = ($null -eq $fin.data.safeToday); $finTgt = $fin.data.needs.target
+Check 'finance endpoint (empty month)' ($finOk -and $finRateNull -and $finSafeNull -and $finTgt -eq 50) "ok=$finOk rate-null=$finRateNull safe-null=$finSafeNull target=$finTgt"
 $sh = curl.exe -s -o NUL -w '%{http_code}' -X POST "$base/share"
 Check 'share fallback redirects (303)' ($sh -eq '303')
 $ac = Call POST '/api/settings' @{ auto_confirm = 0.9 }

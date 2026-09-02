@@ -46,7 +46,7 @@ function Test-Server {
   $c = New-Object System.Net.Sockets.TcpClient
   try {
     $t = $c.BeginConnect('127.0.0.1', $script:port, $null, $null)
-    if (-not $t.AsyncWaitHandle.WaitOne(1500)) { return $false }
+    if (-not $t.AsyncWaitHandle.WaitOne(3000)) { return $false }
     $c.EndConnect($t)
     return $true
   } catch { return $false } finally { $c.Close() }
@@ -58,7 +58,9 @@ function Start-Server {
   if (-not (Test-Path $nodeExe)) { return }
   # -WindowStyle Hidden: node gets its OWN hidden console. Do NOT use -NoNewWindow here —
   # a console inherited from the tray dies with the tray's parent console and takes node down.
-  Start-Process -FilePath $nodeExe -ArgumentList ('"' + (Join-Path $root 'server\index.js') + '"') -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+  $newProc = Start-Process -FilePath $nodeExe -ArgumentList ('"' + (Join-Path $root 'server\index.js') + '"') -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+  # Background work (bill import rescans ~45 days of mail) must never stutter the desktop.
+  if ($newProc) { try { $newProc.PriorityClass = 'BelowNormal' } catch { } }
   # Refresh on EVERY start (initial boot, menu restart, watchdog): cooldown measures from the
   # real launch moment, so a slow-booting node is never mistaken for "down" and double-started.
   $script:lastAttempt = Get-Date
@@ -128,9 +130,15 @@ $timer.Add_Tick({
   if ($script:stopping) { return }
   if (-not (Test-Server)) {
     if (((Get-Date) - $script:lastAttempt).TotalSeconds -ge 30) {
-      $script:lastAttempt = Get-Date
-      Start-Server
-      Show-Balloon 'PennyWise 服务掉线，已在后台自动重启'
+      # Busy-machine false negative guard: if the port is still OWNED by a live process the
+      # server is alive, just slow to answer (Defender scan / heavy IO). Restarting on top of
+      # it used to produce "port occupied" conflicts and restart storms -> never double-start.
+      $listener = Get-NetTCPConnection -LocalPort $script:port -State Listen -ErrorAction SilentlyContinue
+      if (-not $listener) {
+        $script:lastAttempt = Get-Date
+        Start-Server
+        Show-Balloon 'PennyWise 服务掉线，已在后台自动重启'
+      }
     }
   }
 })
