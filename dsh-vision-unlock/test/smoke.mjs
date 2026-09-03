@@ -6,7 +6,25 @@
 import assert from 'node:assert';
 // 绝对路径导入已安装的插件：其内部对 @deepseek-ai/schemastery 的依赖
 // 会沿 node_modules 链解析到 <profile>/node_modules。
-import { apply } from 'file:///C:/Users/zxq07/.dsh/profiles/desktop/node_modules/@local/dsh-vision-unlock/dist/index.js';
+// 优先从相对路径加载（仓库内），否则回退到本机 profile 安装路径。
+// 用法：把本文件放在仓库任意位置运行，或设置 PW_UNLOCK_PATH 指定 dist/index.js。
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+function loadApply() {
+	const candidates = [
+		process.env.PW_UNLOCK_PATH,
+		resolve(import.meta.dirname, '../dist/index.js'),
+	].filter(Boolean);
+	for (const p of candidates) {
+		if (existsSync(p)) return import(pathToFileURL(p).href);
+	}
+	throw new Error('找不到 dsh-vision-unlock/dist/index.js，请设置 PW_UNLOCK_PATH');
+}
+
+const { apply } = await loadApply();
 
 // —— 模拟 pi-ai ModelsImpl：方法在原型上，实例字段可被插件实例级覆盖 ——
 class FakeModels {
