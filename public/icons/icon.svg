@@ -1,5 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
-  <rect width="192" height="192" rx="42" fill="#0f1115"/>
-  <circle cx="96" cy="96" r="64" fill="#4f8cff"/>
-  <text x="96" y="134" font-family="Segoe UI, -apple-system, sans-serif" font-size="92" font-weight="700" fill="#ffffff" text-anchor="middle">¥</text>
+  <!-- 打工人手账风：薄荷底 + 奶油点点 + 墨绿 ¥（去掉了旧深色主题藏青/蓝） -->
+  <rect width="192" height="192" rx="44" fill="#D9EBDF"/>
+  <g fill="#FFFDF4" opacity="0.9">
+    <circle cx="42" cy="42" r="3.5"/>
+    <circle cx="62" cy="42" r="3.5"/>
+    <circle cx="42" cy="62" r="3.5"/>
+    <circle cx="130" cy="42" r="3.5"/>
+    <circle cx="150" cy="42" r="3.5"/>
+    <circle cx="42" cy="130" r="3.5"/>
+    <circle cx="42" cy="150" r="3.5"/>
+  </g>
+  <text x="96" y="133" font-family="'Segoe UI', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="94" font-weight="800" fill="#17453B" text-anchor="middle">¥</text>
+  <!-- 右下角两粒语义色点缀：奶黄 + 奶粉 -->
+  <circle cx="166" cy="166" r="10" fill="#FAF0C6"/>
+  <circle cx="148" cy="178" r="7" fill="#FBE3E1"/>
 </svg>

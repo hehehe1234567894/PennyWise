@@ -12,13 +12,13 @@
   --border: #E6E1D3;
   --border2: #D8D2C0;
   --text: #17453B;          /* 主文字·深墨绿（不是黑） */
-  --dim: #8B9088;
+  --dim: #66736A;           /* 次级文字·加深后奶油底上 ≥4.4:1 */
   --accent: #1E7A5A;        /* 强调绿 */
   --accent2: #2FA574;
   --green: #1E7A5A;
   --red: #D9534F;
   --blue: #5B8DB8;
-  --warn: #C98F2B;
+  --warn: #8F620C;          /* 警告文字·加深以过浅底对比 */
   --mint: #D9EBDF;          /* 收入卡 */
   --pink: #FBE3E1;          /* 支出卡 */
   --butter: #FAF0C6;        /* 目标 / 提示 */
@@ -99,7 +99,7 @@ main section[hidden] { display: none !important; }
 main { max-width: 640px; margin: 0 auto; padding: 14px 14px 110px; }
 .model-alert {
   background: var(--butter); border: 1px dashed #E3CE7E;
-  color: #8a6d1a; border-radius: 14px; padding: 11px 13px; font-size: 13px;
+  color: #6F5D26; border-radius: 14px; padding: 11px 13px; font-size: 13px;
   margin: 0 0 14px; cursor: pointer; line-height: 1.55;
 }
 .panel {
@@ -162,12 +162,18 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   transition: color .15s, background .15s;
 }
 .icon-btn:hover { color: var(--accent); background: #F7EDC4; }
+/* 键盘可达性：按钮/链接补上可见焦点环（浅色主题下默认 focus 不可见） */
+.btn:focus-visible, .icon-btn:focus-visible, .side-item:focus-visible,
+.tab:focus-visible, .chat-fab:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 /* ---------- 标签 / 徽章 ---------- */
 .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 500; }
-.chip-ok { background: var(--mint); color: var(--green); }
-.chip-off { background: var(--pink); color: var(--red); }
-.chip-warn { background: var(--butter); color: #8a6d1a; }
+/* 彩色底芯片：文字取同色系加深档，保证 12px 小字 ≥4.5:1 */
+.chip-ok { background: var(--mint); color: #1B6B52; }
+.chip-off { background: var(--pink); color: #B6403A; }
+.chip-warn { background: var(--butter); color: #6F5D26; }
 .section-head { display: flex; align-items: center; gap: 8px; }
 
 /* ---------- 通用卡片 ---------- */
@@ -192,7 +198,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   display: flex; flex-direction: column; gap: 7px;
   background: var(--butter);
   border: 1px solid #EFE2B0; border-radius: 16px; padding: 12px 14px;
-  margin-bottom: 12px; font-size: 13px; color: #7d6a33;
+  margin-bottom: 12px; font-size: 13px; color: #6F5D26;
 }
 .sum-row span { display: flex; justify-content: space-between; align-items: center; }
 .sum-row b { font-size: 15px; font-weight: 800; }
@@ -337,7 +343,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .rec-sec { margin-bottom: 8px; }
 .rec-sec-t { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
 .rec-sec-t.cheaper { color: var(--green); }
-.rec-sec-t.better { color: #8a6d1a; }
+.rec-sec-t.better { color: #6F5D26; }
 .rec-body {
   font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
   background: var(--card2); border-radius: 10px; padding: 8px 10px;
@@ -617,10 +623,10 @@ main { position: relative; z-index: 1; }
 .m-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-cnt { flex: none; font-size: 10.5px; color: var(--dim); }
 .m-badge { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
-.m-badge.up { background: var(--pink); color: var(--red); }
-.m-badge.down { background: var(--mint); color: var(--green); }
+.m-badge.up { background: var(--pink); color: #B6403A; }
+.m-badge.down { background: var(--mint); color: #1B6B52; }
 .m-badge.flat { background: var(--card2); color: var(--dim); font-weight: 500; }
-.m-badge.new { background: #E4E9F4; color: #5B7FA6; }
+.m-badge.new { background: #E4E9F4; color: #46678D; }
 .m-nums { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .m-nums b { font-size: 13px; font-variant-numeric: tabular-nums; }
 .m-nums span { font-size: 10.5px; color: var(--dim); }

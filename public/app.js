@@ -114,7 +114,7 @@
     const el = $('model-alert')
     const msgs = modelAlertMsgs(modelStatusCache)
     if (msgs.length) {
-      el.innerHTML = `⚠ ${esc(msgs.join('；'))}。点此查看修复方法`
+      el.innerHTML = `⚠️ ${esc(msgs.join('；'))}。点此查看修复方法`
       el.classList.remove('hidden')
     } else {
       el.classList.add('hidden')
@@ -492,8 +492,8 @@
         toast(`已自动入账 ✓（置信度 ${Math.round((transaction.confidence || 0) * 100)}%）`)
       } else {
         if (parse.code === 'no_key') toast('未配置 AI 模型，已转手动确认')
-        else if (parse.code === 'insufficient_balance') toast('⚠ AI 模型欠费，已转手动确认')
-        else if (parse.code === 'invalid_key') toast('⚠ API Key 无效，已转手动确认')
+        else if (parse.code === 'insufficient_balance') toast('⚠️ AI 模型欠费，已转手动确认')
+        else if (parse.code === 'invalid_key') toast('⚠️ API Key 无效，已转手动确认')
         else if (parse.code === 'ok') toast('解析完成，请确认')
         else if (parse.code === 'duplicate') toast('这条已经存在')
         else toast('AI 解析失败（' + (MODEL_ERR_LABEL[parse.code] || parse.code) + '），已转手动确认')
@@ -536,7 +536,7 @@
           <div class="tx-main">
             <div class="tx-amt expense">${fmtMoney(t.amount)}</div>
             <div class="tx-info">
-              <div class="tx-merchant">${esc(t.merchant || '（未识别商户）')}${t.raw_image || t.local_image ? ' 🖼' : ''}</div>
+              <div class="tx-merchant">${esc(t.merchant || '（未识别商户）')}${t.raw_image || t.local_image ? ' 🖼️' : ''}</div>
               <div class="tx-raw">${esc(t.raw_text || '')}</div>
             </div>
           </div>
@@ -626,7 +626,7 @@
         ? `<span class="cat-chip" style="background:${catColor(t.category)}1f;color:${catColor(t.category)}">${esc(t.category)}</span>` : ''
       return `${dayHead}<div class="card row-card" data-id="${esc(t.uid)}">
         <div class="row-left">
-          <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}${t.raw_image || t.local_image ? ' 🖼' : ''}</div>
+          <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}${t.raw_image || t.local_image ? ' 🖼️' : ''}</div>
           <div class="row-sub">${fmtTs(t.ts)} · ${esc(ACC_LABEL[t.account] || '')}${catChip}</div>
         </div>
         <div class="row-amt ${cls}">${sign}${fmtMoney(t.amount)}</div>
@@ -864,7 +864,7 @@
       const line = (label, v, p, target, invert, cls) => {
         const pTxt = p === null ? '（先记一笔本月收入）' : `${p}%（目标${invert ? '≥' : '≤'}${target}%）`
         const good = p === null ? null : (invert ? p >= target : p <= target)
-        const flag = good === null ? '' : ` <span class="${good ? 'fin-ok' : 'fin-bad'}">${good ? '✓ 达标' : '⚠ 超标'}</span>`
+        const flag = good === null ? '' : ` <span class="${good ? 'fin-ok' : 'fin-bad'}">${good ? '✓ 达标' : '⚠️ 超标'}</span>`
         const w = Math.max(3, Math.min(100, p === null ? 3 : p))
         return `<div class="fin-row">
           <div class="fin-head"><span>${label}</span><span><b class="${cls}">¥${fmtMoney(v)}</b> · ${pTxt}${flag}</span></div>
@@ -1165,7 +1165,7 @@
         const parts = [`新导入 ${d.imported} 条`, `跳过重复 ${d.skipped} 条`]
         if (d.merged > 0) parts.push(`LLM 合并 ${d.merged} 条`)
         if (d.passwords > 0) parts.push(`识别到 ${d.passwords} 个解压密码`)
-        if (d.mergeError) parts.push(`⚠ 合并审核失败(${d.mergeError})，新导入的请人工核对是否重复`)
+        if (d.mergeError) parts.push(`⚠️ 合并审核失败(${d.mergeError})，新导入的请人工核对是否重复`)
         st.textContent = `✓ 完成：${parts.join('，')}${d.error ? '（' + d.error + '）' : ''}`
         refreshAll()
       } catch (e) {
@@ -1182,7 +1182,7 @@
       try {
         const d = (await api('/api/audit?month=' + encodeURIComponent(month))).data
         const s = d.summary
-        const lines = [`账单行 ${s.billRows} 条：✓正常 ${s.ok}，⚠缺失 ${s.missing}，⚠不符 ${s.mismatch}；疑似重复对 ${s.dupPairs}`]
+        const lines = [`账单行 ${s.billRows} 条：✓正常 ${s.ok}，⚠️缺失 ${s.missing}，⚠️不符 ${s.mismatch}；疑似重复对 ${s.dupPairs}`]
         if (d.llm?.note) lines.push(`模型终审（${d.llm.ok ? d.llm.model : '未完成'}）：${d.llm.note}`)
         st.textContent = lines.join('\n')
         if (s.missing + s.mismatch + s.dupPairs > 0) $('audit-download').classList.remove('hidden')
