@@ -19,9 +19,9 @@
   const DIR_LABEL = { expense: '支出', income: '收入', refund: '退款', transfer: '转账' }
   const ACC_LABEL = { wechat: '微信', alipay: '支付宝', bank: '银行卡', cash: '现金', other: '其他' }
   // 语义化分类配色（环形图/图例/流水芯片统一使用）
-  const CAT_HEX = { '餐饮': '#f59e0b', '交通': '#38bdf8', '购物': '#ec4899', '娱乐': '#a855f7', '学习': '#22c55e', '日用品': '#84cc16', '医疗': '#ef4444', '通讯': '#06b6d4', '住宿': '#8b5cf6', '运动': '#10b981', '生活缴费': '#f97316', '人情': '#eab308', '其他': '#64748b' }
-  const catColor = (n) => CAT_HEX[n] || '#4f8cff'
-  const CAT_COLORS = ['#4f8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#84cc16']
+  const CAT_HEX = { '餐饮': '#E8A33D', '交通': '#7FB5C9', '购物': '#D98BA3', '娱乐': '#A88BD4', '学习': '#7FBF8E', '日用品': '#A6C86B', '医疗': '#E07B7B', '通讯': '#6FB5B0', '住宿': '#9B8EC4', '运动': '#5FB894', '生活缴费': '#E09B5A', '人情': '#D4B54A', '其他': '#9AA096' }
+  const catColor = (n) => CAT_HEX[n] || '#1E7A5A'
+  const CAT_COLORS = ['#E8A33D', '#7FB5C9', '#D98BA3', '#A88BD4', '#7FBF8E', '#A6C86B', '#E07B7B', '#6FB5B0']
 
   const TOKEN_KEY = 'pw_token'
   let token = localStorage.getItem(TOKEN_KEY) || ''
@@ -724,12 +724,12 @@
       </div>`
     }).join('')
     // 账户分布
-    const acctColors = { wechat: '#22c55e', alipay: '#4f8cff', bank: '#f59e0b', cash: '#84cc16', other: '#64748b' }
+    const acctColors = { wechat: '#5FB894', alipay: '#7FB5C9', bank: '#E8A33D', cash: '#A6C86B', other: '#9AA096' }
     const acctTotal = s.byAccount.reduce((a, b) => a + b.v, 0) || 1
-    const acctBar = `<div class="acct-bar">${s.byAccount.map((e) => `<div style="--w:${(e.v / acctTotal) * 100}%;background:${acctColors[e.k] || '#4f8cff'}"></div>`).join('')}</div>`
+    const acctBar = `<div class="acct-bar">${s.byAccount.map((e) => `<div style="--w:${(e.v / acctTotal) * 100}%;background:${acctColors[e.k] || '#7FB5C9'}"></div>`).join('')}</div>`
     const acctRows = s.byAccount.map((e) => `
       <div class="acct-row">
-        <span class="dot" style="background:${acctColors[e.k] || '#4f8cff'}"></span>
+        <span class="dot" style="background:${acctColors[e.k] || '#7FB5C9'}"></span>
         <span>${esc(ACC_LABEL[e.k] || e.k)}</span>
         <span class="acct-amt">${fmtMoney(e.v)} · ${Math.round((e.v / acctTotal) * 100)}%</span>
       </div>`).join('')
@@ -985,7 +985,7 @@
           const over = b.spent > b.limit
           return `<div class="cat-row" data-cat="${esc(b.category)}">
             <div class="cat-name">${esc(b.category)}</div>
-            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(3, pct)}%;background:${over ? '#ef4444' : '#22c55e'}"></div></div>
+            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(3, pct)}%;background:${over ? '#D9534F' : '#2FA574'}"></div></div>
             <div class="cat-amt ${over ? 'expense' : ''}">${fmtMoney(b.spent)}/${b.limit}</div>
           </div>`
         }).join('')
@@ -1508,7 +1508,7 @@
     cv.id = 'bg-fx'
     document.body.prepend(cv)
     const ctx = cv.getContext('2d')
-    const COLORS = ['79,140,255', '34,197,94', '147,160,180'] // 主题蓝 / 主题绿 / 灰
+    const COLORS = ['169, 196, 178', '235, 195, 190', '196, 190, 168'] // 手账薄荷绿 / 奶粉 / 暖灰
     let W = 0, H = 0, dots = [], hidden = false, t = Math.random() * 10000
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
