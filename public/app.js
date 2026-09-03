@@ -623,7 +623,7 @@
       const cls = t.direction === 'income' ? 'income' : (t.direction === 'refund' ? 'refund' : 'expense')
       const sign = (t.direction === 'income' || t.direction === 'refund') ? '+' : '-'
       const catChip = (t.direction === 'expense' && t.category)
-        ? `<span class="cat-chip" style="background:${catColor(t.category)}1f;color:${catColor(t.category)}">${esc(t.category)}</span>` : ''
+        ? `<span class="cat-chip" style="background:${catColor(t.category)}1f">${esc(t.category)}</span>` : ''
       return `${dayHead}<div class="card row-card" data-id="${esc(t.uid)}">
         <div class="row-left">
           <div class="row-merchant">${esc(t.merchant || '（无商户）')}${t.status === 'pending' ? '<span class="dot-pending"></span>' : ''}${t.raw_image || t.local_image ? ' 🖼️' : ''}</div>
@@ -985,7 +985,7 @@
           const over = b.spent > b.limit
           return `<div class="cat-row" data-cat="${esc(b.category)}">
             <div class="cat-name">${esc(b.category)}</div>
-            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(3, pct)}%;background:${over ? '#D9534F' : '#2FA574'}"></div></div>
+            <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${Math.max(3, pct)}%;background:${over ? '#C0392B' : '#2FA574'}"></div></div>
             <div class="cat-amt ${over ? 'expense' : ''}">${fmtMoney(b.spent)}/${b.limit}</div>
           </div>`
         }).join('')
