@@ -783,9 +783,9 @@
         const arr = byDay.get(key) || []
         const top = arr.slice(0, 3)
         const rest = arr.slice(3).reduce((a, z) => a + z.amount, 0)
-        tip.innerHTML = `<div class="day-tip-date">${s.month}-${String(key + 1).padStart(2, '0')} · 共 ¥${fmtMoney(total)}</div>` +
-          top.map((z) => `<div class="day-tip-row"><span class="day-tip-name">${esc(z.name)}</span><b>¥${fmtMoney(z.amount)}</b></div>`).join('') +
-          (rest > 0.005 ? `<div class="day-tip-row"><span class="day-tip-name">其他 ${arr.length - 3} 项</span><b>¥${fmtMoney(rest)}</b></div>` : '') +
+        tip.innerHTML = `<div class="day-tip-date">${s.month}-${String(key + 1).padStart(2, '0')} · 共 ${fmtMoney(total)}</div>` +
+          top.map((z) => `<div class="day-tip-row"><span class="day-tip-name">${esc(z.name)}</span><b>${fmtMoney(z.amount)}</b></div>`).join('') +
+          (rest > 0.005 ? `<div class="day-tip-row"><span class="day-tip-name">其他 ${arr.length - 3} 项</span><b>${fmtMoney(rest)}</b></div>` : '') +
           (arr.length ? '<div class="day-tip-hint">点击柱条在流水中查看当天</div>' : '')
         tip.classList.remove('hidden')
         const wrap = chart.parentElement
@@ -860,22 +860,22 @@
     if (!el) return
     const month = $('fin-month').value || localMonth()
     try {
-      const d = (await api('/api/finance?month=' + encodeURIComponent(month))).data
+      const d = await api('/api/finance?month=' + encodeURIComponent(month))
       const line = (label, v, p, target, invert, cls) => {
         const pTxt = p === null ? '（先记一笔本月收入）' : `${p}%（目标${invert ? '≥' : '≤'}${target}%）`
         const good = p === null ? null : (invert ? p >= target : p <= target)
         const flag = good === null ? '' : ` <span class="${good ? 'fin-ok' : 'fin-bad'}">${good ? '✓ 达标' : '⚠️ 超标'}</span>`
         const w = Math.max(3, Math.min(100, p === null ? 3 : p))
         return `<div class="fin-row">
-          <div class="fin-head"><span>${label}</span><span><b class="${cls}">¥${fmtMoney(v)}</b> · ${pTxt}${flag}</span></div>
+          <div class="fin-head"><span>${label}</span><span><b class="${cls}">${fmtMoney(v)}</b> · ${pTxt}${flag}</span></div>
           <div class="cat-bar-wrap"><div class="cat-bar" style="--w:${w}%"></div></div>
         </div>`
       }
       const safe = d.safeToday === null
         ? '<p class="fin-safe dim">先记一笔本月收入，才能算"今天还能花多少"（先存后花）</p>'
-        : `<p class="fin-safe">今天还能花 <b class="expense">¥${fmtMoney(d.safeToday)}</b> · 本月剩 ${d.daysLeft} 天 <span class="dim">（先存后花：按收入 80% 摊到剩余每天）</span></p>`
+        : `<p class="fin-safe">今天还能花 <b class="expense">${fmtMoney(d.safeToday)}</b> · 本月剩 ${d.daysLeft} 天 <span class="dim">（先存后花：按收入 80% 摊到剩余每天）</span></p>`
       const budget = d.budgetTotal > 0
-        ? `信封预算已用 <b class="${d.expense > d.budgetTotal ? 'expense' : 'income'}">${Math.round((d.expense / d.budgetTotal) * 100)}%</b>（¥${fmtMoney(d.expense)} / ¥${fmtMoney(d.budgetTotal)}）· 明细见下方信封`
+        ? `信封预算已用 <b class="${d.expense > d.budgetTotal ? 'expense' : 'income'}">${Math.round((d.expense / d.budgetTotal) * 100)}%</b>（${fmtMoney(d.expense)} / ${fmtMoney(d.budgetTotal)}）· 明细见下方信封`
         : '未设置信封预算：用下方编辑器给分类设限额（可一键生成本月实际）'
       const savCls = d.savings.total < 0 ? 'expense' : 'income'
       el.innerHTML = `
@@ -1180,7 +1180,7 @@
       st.textContent = '核验中…（含模型终审，最长约 2 分钟）'
       $('audit-download').classList.add('hidden')
       try {
-        const d = (await api('/api/audit?month=' + encodeURIComponent(month))).data
+        const d = await api('/api/audit?month=' + encodeURIComponent(month))
         const s = d.summary
         const lines = [`账单行 ${s.billRows} 条：✓正常 ${s.ok}，⚠️缺失 ${s.missing}，⚠️不符 ${s.mismatch}；疑似重复对 ${s.dupPairs}`]
         if (d.llm?.note) lines.push(`模型终审（${d.llm.ok ? d.llm.model : '未完成'}）：${d.llm.note}`)
