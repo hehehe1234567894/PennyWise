@@ -11,6 +11,8 @@ import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv
 import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
 import { analyzeBillForAlternatives } from './recommend.js'
 import { auditMonth, buildAuditCsv } from './audit.js'
+import { classifyPreview, classifyPending } from './classify.js'
+import { qualityCheck } from './quality.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 import { pushEvent, recentEvents, onEvent } from './notify.js'
@@ -775,6 +777,33 @@ app.get('/api/audit/export', async (req, res) => {
     res.set('Cache-Control', 'no-store')
     res.send('\uFEFF' + buildAuditCsv(data))
   } catch (e) { fail(res, 500, 'audit_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// ---- AI 批量分类：未分类支出分批交给 LLM 推理，输出结构化分类并写回（GET 预览不计费） ----
+const optMonth = (v) => (typeof v === 'string' && /^\d{4}-\d{2}$/.test(v) ? v : '')
+app.get('/api/classify', (req, res) => {
+  res.json({ ok: true, data: classifyPreview(optMonth(req.query.month)) })
+})
+app.post('/api/classify', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const data = await classifyPending({ month: optMonth(b.month), apply: b.apply !== false })
+    res.json({ ok: true, data })
+  } catch (e) { fail(res, 500, 'classify_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// ---- 数据质量体检：先程序合并预处理（apply），再 LLM 复核剩余异常（只给意见不改账） ----
+// month 缺省 = 全量体检
+app.get('/api/quality', async (req, res) => {
+  try { res.json({ ok: true, data: await qualityCheck({ month: optMonth(req.query.month), apply: false }) }) }
+  catch (e) { fail(res, 500, 'quality_error', String(e?.message || e).slice(0, 200)) }
+})
+app.post('/api/quality', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const data = await qualityCheck({ month: optMonth(b.month), apply: b.apply === true })
+    res.json({ ok: true, data })
+  } catch (e) { fail(res, 500, 'quality_error', String(e?.message || e).slice(0, 200)) }
 })
 
 // ---- 商家维度月度汇总（钱花在哪个商家；含上月环比） ----

@@ -28,6 +28,23 @@
   let categories = { expense: [], income: [] }
   let currentEditor = null
 
+  // ---------- 外观主题：iOS 浅色（默认）/ 手账奶油 / iOS 深色 ----------
+  const THEME_KEY = 'pw-theme'
+  const THEMES = {
+    'ios-light': { label: 'iOS 浅色', bg: '#F5F5F7' },
+    'journal': { label: '手账奶油', bg: '#F7F2E3' },
+    'ios-dark': { label: 'iOS 深色', bg: '#0E0E10' },
+  }
+  function applyTheme(t, save = true) {
+    if (!THEMES[t]) t = 'ios-light'
+    document.documentElement.dataset.theme = t
+    if (save) localStorage.setItem(THEME_KEY, t)
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta) meta.content = THEMES[t].bg
+    window.dispatchEvent(new CustomEvent('pw-themechange', { detail: t }))
+  }
+  applyTheme(localStorage.getItem(THEME_KEY) || 'ios-light', false)
+
   function uuid() {
     return (crypto.randomUUID && crypto.randomUUID()) || 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
   }
@@ -1050,6 +1067,57 @@
     if (active === 'fin') renderFin().catch(() => {})
   }
 
+  // ---------- 体检 / 批量分类 结果渲染 ----------
+  function classifyListHtml(items) {
+    if (!items || !items.length) return '<p class="hint">这批没有可写回的分类（模型拿不准的都按「其他」跳过了）。</p>'
+    return items.slice(0, 12).map((it) => `
+      <div class="qa-item"><div class="qa-item-head">
+        <span class="chip chip-ok">${esc(it.to)}</span>
+        <span>${esc(it.merchant)}${it.goods_name ? ' · ' + esc(it.goods_name) : ''}</span>
+        <span class="dim">${esc(it.from)} → ${esc(it.to)}${it.status === 'pending' ? ' · 待确认' : ''}</span>
+      </div></div>`).join('') + (items.length > 12 ? `<p class="hint">…等共 ${items.length} 条，全部已写回</p>` : '')
+  }
+
+  function renderQuality(d) {
+    const s = d.summary || {}
+    const chips = [
+      ['chip-ok', `已检查 ${s.checked ?? 0} 条`],
+      s.dupExact ? ['chip-off', `精确重复 ${s.dupExact} 组`] : '',
+      s.dupFuzzy ? ['chip-off', `疑似重复 ${s.dupFuzzy} 对`] : '',
+      s.missing ? ['chip-off', `字段缺失 ${s.missing}`] : '',
+      s.formatErrors ? ['chip-warn', `格式错误 ${s.formatErrors}`] : '',
+      s.inconsistent ? ['chip-warn', `字段不一致 ${s.inconsistent}`] : '',
+      s.backlog ? ['chip-warn', `积压待确认 ${s.backlog}`] : '',
+    ].filter(Boolean).map(([cls, txt]) => `<span class="chip ${cls}">${txt}</span>`).join('')
+    const f = d.fixed || {}
+    const fixedBits = []
+    if (f.merged) fixedBits.push(`合并精确重复 ${f.merged} 条`)
+    if (f.ruleFilled) fixedBits.push(`按规则记忆补分类 ${f.ruleFilled} 条`)
+    if (f.normalized) fixedBits.push(`字段归一 ${f.normalized} 处`)
+    if (f.trimmed) fixedBits.push(`空白清洗 ${f.trimmed} 处`)
+    const fixedHtml = fixedBits.length
+      ? `<p class="qa-fixed">🩹 已修复：${esc(fixedBits.join('，'))}</p>`
+      : (d.apply ? '<p class="hint">程序修复：没有需要修复的问题。</p>' : '')
+    const llmHtml = d.llm?.note
+      ? `<p class="hint">🤖 AI 复核${d.llm.ok ? `（${esc(d.llm.model)}）` : '（未调用）'}：${esc(d.llm.note)}</p>` : ''
+    const itemsHtml = (d.items || []).slice(0, 20).map((it) => {
+      const t0 = it.txs?.[0]
+      const t1 = it.txs?.[1]
+      const cls = (it.kind === 'dup_exact' || it.kind === 'dup_fuzzy' || it.kind === 'missing') ? 'chip-off' : (it.kind === 'backlog' ? 'chip' : 'chip-warn')
+      return `<div class="qa-item">
+        <div class="qa-item-head">
+          <span class="${cls}">${esc(it.label)}</span>
+          ${t0 ? `<span>${esc(t0.merchant || '（无商户）')} · ¥${t0.amount ?? '—'} · ${esc(String(t0.ts || '').slice(5, 10))}</span>` : ''}
+        </div>
+        ${it.detail ? `<div class="detail">${esc(it.detail)}</div>` : ''}
+        ${t1 ? `<div class="detail">疑似与另一条重复：${esc(t1.merchant || '（无商户）')} · ¥${t1.amount ?? '—'} · ${esc(String(t1.ts || '').slice(5, 10))}（来源 ${esc(t1.source || '?')}）</div>` : ''}
+        ${it.advice ? `<div class="advice"><b>AI</b> ${esc(it.verdict || '待判')} — ${esc(it.advice)}</div>` : ''}
+      </div>`
+    }).join('')
+    const more = (d.items || []).length > 20 ? `<p class="hint">…仅显示前 20 条（共 ${d.items.length} 条）</p>` : ''
+    $('qa-result').innerHTML = `<div class="qa-chips">${chips}</div>${fixedHtml}${llmHtml}${itemsHtml}${more}`
+  }
+
   // ---------- 设置 ----------
   function showSettings() {
     // AI 区块只在模型异常时出现；一切正常则完全不显示模型相关内容
@@ -1073,6 +1141,13 @@
       </div>
       <p id="set-status" class="hint"></p>
       ${aiSection}
+      <h3>外观</h3>
+      <p class="hint">三套主题即时切换，选择会记住并同步到这台设备的所有页面。</p>
+      <div class="seg" id="theme-seg" role="tablist" aria-label="外观主题">
+        <button type="button" class="seg-btn" data-theme="ios-light">iOS 浅色</button>
+        <button type="button" class="seg-btn" data-theme="journal">手账奶油</button>
+        <button type="button" class="seg-btn" data-theme="ios-dark">iOS 深色</button>
+      </div>
       <h3>自动化</h3>
       <p class="hint">解析置信度达到阈值就直接入账，不弹确认框；1.0 = 全部手动确认。</p>
       <label>自动入账阈值
@@ -1093,6 +1168,13 @@
         <button type="button" class="btn" id="set-import">立即检查邮箱导入</button>
       </div>
       <p id="set-import-status" class="hint"></p>
+      <h3>AI 批量分类</h3>
+      <p class="hint">把分类为「其他 / 未分类」的支出按商户去重后<b>分批</b>交给 AI 推理，输出结构化分类直接写回账本，并沉淀成规则记忆——同一商户下月起自动归类、0 token。收入 / 退款 / 转账不受影响。</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="btn-classify">🤖 批量分类未归类支出</button>
+      </div>
+      <p id="classify-status" class="hint"></p>
+      <div id="classify-result"></div>
       <h3>账单核验</h3>
       <p class="hint">导入时已留存原始账单行。核验会把账单行与账本逐行比对（缺失 / 金额不符 / 方向不符 / 疑似重复），异常项交由强模型终审（qwen3.8-flash 长文本优先，DeepSeek 托底），模型只给意见不改账。</p>
       <div class="btn-row">
@@ -1101,6 +1183,15 @@
         <button type="button" class="btn hidden" id="audit-download">⬇️ 下载核验报告 CSV</button>
       </div>
       <p id="audit-status" class="hint"></p>
+      <h3>数据体检</h3>
+      <p class="hint">排查重复（精确 / 疑似）、缺失字段、格式错误、字段不一致。顺序严格遵循「先程序后模型」：程序先做合并与安全修复（零风险、可同步），再把剩余异常分批交给 AI 复核——AI 只给意见，不改账。月份留空 = 全库体检。</p>
+      <div class="btn-row">
+        <input id="qa-month" type="month" class="month-input">
+        <button type="button" class="btn" id="btn-qa-check">🩺 开始体检</button>
+        <button type="button" class="btn" id="btn-qa-fix">🩹 修复并复检</button>
+      </div>
+      <p id="qa-status" class="hint"></p>
+      <div id="qa-result"></div>
       <h3>月报提醒</h3>
       <p class="hint">每月 1 日自动把上月汇总发到邮箱（绑定微信「QQ邮箱提醒」即可在微信里收到；可加 Server酱 直推微信，见 README）。</p>
       <div class="btn-row">
@@ -1123,6 +1214,56 @@
       } catch (e) {
         $('set-status').textContent = '✗ 连接失败：' + e.message
       }
+    })
+    // 外观主题切换（即时生效 + 记住选择）
+    const seg = $('theme-seg')
+    const syncSeg = () => seg.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.theme === (document.documentElement.dataset.theme || 'ios-light')))
+    syncSeg()
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('.seg-btn')
+      if (!b) return
+      applyTheme(b.dataset.theme)
+      syncSeg()
+    })
+    // AI 批量分类：GET 预览规模（不花钱）→ confirm → POST 写回
+    $('btn-classify').addEventListener('click', async () => {
+      const st = $('classify-status')
+      const box = $('classify-result')
+      try {
+        const p = await api('/api/classify')
+        if (!p.scanned) { st.textContent = '✓ 没有需要分类的支出，账本很干净'; box.innerHTML = ''; return }
+        if (!confirm(`扫描到 ${p.scanned} 条未归类支出（按商户去重后 ${p.uniq} 组，约 ${p.batches} 次 AI 调用）。\n分类结果将直接写回账本并沉淀规则记忆，继续？`)) return
+        st.textContent = 'AI 分类中…（每批约 40 组，失败自动重试一次）'
+        const d = await api('/api/classify', { method: 'POST', body: { apply: true } })
+        if (d.error && !d.updated) { st.textContent = '✗ 分类失败：' + d.error + '（账本未改动）'; return }
+        st.textContent = `✓ 完成：AI 给出 ${d.categorized} 组分类，写回 ${d.updated} 条，新增规则记忆 ${d.rules} 条` +
+          (d.errors.length ? `（⚠️ ${d.errors.length} 批推理失败已跳过：${d.errors[0]}）` : '')
+        box.innerHTML = classifyListHtml(d.items)
+        refreshAll()
+      } catch (e) { st.textContent = '✗ ' + e.message }
+    })
+    // 数据体检：GET 检查 + AI 复核；POST 先程序安全修复再复检
+    $('btn-qa-check').addEventListener('click', async () => {
+      const st = $('qa-status')
+      const month = $('qa-month').value
+      st.textContent = '体检中…（有异常时含 AI 复核，最长约 2 分钟）'
+      try {
+        const d = await api('/api/quality' + (month ? `?month=${encodeURIComponent(month)}` : ''))
+        st.textContent = '✓ 体检完成（只报告，未改动任何数据）'
+        renderQuality(d)
+      } catch (e) { st.textContent = '✗ ' + e.message }
+    })
+    $('btn-qa-fix').addEventListener('click', async () => {
+      const st = $('qa-status')
+      const month = $('qa-month').value
+      if (!confirm('将按「先程序后模型」执行：\n① 程序安全修复（合并精确重复、按规则记忆补分类、字段归一）——零风险可同步；\n② AI 复核剩余异常，只给意见不改账。\n继续？')) return
+      st.textContent = '修复 + 复检中…'
+      try {
+        const d = await api('/api/quality', { method: 'POST', body: { month, apply: true } })
+        st.textContent = '✓ 修复并复检完成'
+        renderQuality(d)
+        refreshAll()
+      } catch (e) { st.textContent = '✗ ' + e.message }
     })
     // AI Key 保存（仅异常时存在该区块；服务器回写 .env 并立即生效）
     const llmSave = $('set-llm-save')
@@ -1464,7 +1605,7 @@
     } catch (e) { /* 离线不打扰 */ }
   }
 
-  // ---------- 背景粒子装饰（点阵波浪，零依赖 canvas；尊重"减弱动态效果"，页面隐藏时暂停省电） ----------
+  // ---------- 背景粒子装饰（点阵波浪，零依赖 canvas；颜色随主题切换，尊重"减弱动态效果"，页面隐藏时暂停省电） ----------
   function initBgFx() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     if ($('bg-fx')) return
@@ -1472,7 +1613,15 @@
     cv.id = 'bg-fx'
     document.body.prepend(cv)
     const ctx = cv.getContext('2d')
-    const COLORS = ['169, 196, 178', '235, 195, 190', '196, 190, 168'] // 手账薄荷绿 / 奶粉 / 暖灰
+    // 粒子颜色从当前主题的 --fx-* 变量读取，切主题即时跟随
+    let COLORS = ['169, 196, 178', '235, 195, 190', '196, 190, 168']
+    const readFxColors = () => {
+      const css = getComputedStyle(document.documentElement)
+      const c = ['--fx-1', '--fx-2', '--fx-3'].map((k) => css.getPropertyValue(k).trim()).filter(Boolean)
+      if (c.length === 3) COLORS = c
+    }
+    readFxColors()
+    window.addEventListener('pw-themechange', readFxColors)
     let W = 0, H = 0, dots = [], hidden = false, t = Math.random() * 10000
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
