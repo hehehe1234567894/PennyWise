@@ -165,7 +165,7 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .icon-btn:hover { color: var(--accent); background: #F7EDC4; }
 /* 键盘可达性：按钮/链接补上可见焦点环（浅色主题下默认 focus 不可见） */
 .btn:focus-visible, .icon-btn:focus-visible, .side-item:focus-visible,
-.tab:focus-visible, .chat-fab:focus-visible, a:focus-visible {
+.tab:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
@@ -378,40 +378,6 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 .tab.active { color: var(--accent); font-weight: 600; }
 .tab.active .tab-ico { filter: drop-shadow(0 2px 8px rgba(47,165,116,.45)); animation: bounceIco .38s ease; }
 
-/* ---------- AI 助手 ---------- */
-.chat-fab {
-  position: fixed; right: 16px; bottom: 96px; z-index: 40;
-  width: 54px; height: 54px; border-radius: 50%;
-  background: var(--accent);
-  color: #fff; border: none; font-size: 23px; cursor: pointer;
-  box-shadow: 0 6px 18px rgba(30, 122, 90, .3);
-  transition: transform .15s, box-shadow .15s;
-}
-.chat-fab:hover { transform: translateY(-2px) scale(1.05); box-shadow: 0 9px 24px rgba(30, 122, 90, .4); }
-.chat-fab:active { transform: scale(.96); }
-.chat-card { display: flex; flex-direction: column; max-height: min(72vh, 660px); }
-.chat-msgs {
-  flex: 1; min-height: 200px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 9px; padding: 2px 2px 8px;
-}
-.msg {
-  max-width: 84%; padding: 9px 13px; border-radius: 15px;
-  font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
-  animation: fadeUp .22s ease both;
-}
-.msg.user {
-  align-self: flex-end; color: #fff;
-  background: var(--accent);
-  border-bottom-right-radius: 4px;
-}
-.msg.ai {
-  align-self: flex-start; background: var(--card2);
-  border: 1px solid var(--border); border-bottom-left-radius: 4px;
-}
-.chat-input-row { display: flex; gap: 8px; margin-top: 10px; }
-.chat-input-row input { flex: 1; min-width: 0; }
-.chat-input-row .btn { flex: none; }
-
 /* ---------- 弹窗 ---------- */
 .modal {
   position: fixed; inset: 0; background: rgba(23, 69, 59, .3); backdrop-filter: blur(6px); z-index: 60;
@@ -491,7 +457,6 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
 @media (min-width: 760px) and (pointer: fine) {
   .tabs { display: none; }
   .topbar { display: none; }        /* 顶栏职责全部移入侧栏 */
-  .chat-fab { bottom: 24px; right: 24px; }
 
   /* 左侧导航栏（手账风） */
   .sidebar {

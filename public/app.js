@@ -209,9 +209,8 @@
     if (TAB_RENDER[name]) TAB_RENDER[name]()
   }
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)))
-  // 侧栏（电脑端）：导航 + AI 助手 + 设置
+  // 侧栏（电脑端）：导航 + 设置
   document.querySelectorAll('.side-item[data-tab]').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)))
-  $('side-chat').addEventListener('click', () => $('btn-chat').click())
   $('side-settings').addEventListener('click', showSettings)
 
   // ---------- 时间工具 ----------
@@ -953,7 +952,7 @@
       const d = await api('/api/recommend?month=' + encodeURIComponent(month) + (force ? '&force=1' : ''))
       const items = d.items || []
       if (!items.length) {
-        el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">这个月没发现值得优化的商品。想买具体东西？点右下角 🤖 AI 助手直接问。</p>`
+        el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">这个月没发现值得优化的商品。</p>`
         return
       }
       el.innerHTML = `
@@ -965,7 +964,7 @@
             ${it.cheaperText ? `<div class="rec-sec"><div class="rec-sec-t cheaper">💰 更便宜的方案</div><div class="rec-body">${esc(it.cheaperText)}</div></div>` : ''}
             ${it.betterText ? `<div class="rec-sec"><div class="rec-sec-t better">✨ 更好的升级</div><div class="rec-body">${esc(it.betterText)}</div></div>` : ''}
           </div>`).join('')}
-        <p class="rec-note">价格来自联网搜索，随时波动，仅供参考。想买其他东西？点右下角 🤖 AI 助手。</p>`
+        <p class="rec-note">价格来自联网搜索，随时波动，仅供参考。</p>`
       $('rec-refresh').addEventListener('click', () => renderRecs(month, true))
     } catch (e) {
       el.innerHTML = `<div class="stat-block-title">💡 平替与优质推荐（本月账单）</div><p class="empty">推荐加载失败：${esc(e.message)}</p>`
@@ -1387,47 +1386,6 @@
 
   window.addEventListener('online', () => { updateChip(); syncNow(); refreshEndpoints().catch(() => {}) })
   window.addEventListener('offline', updateChip)
-
-  // ---------- AI 助手（网页聊天，与邮箱 Agent 同一套逻辑） ----------
-  let chatGreeted = false
-  $('btn-chat').addEventListener('click', () => {
-    $('chat-modal').classList.remove('hidden')
-    if (!chatGreeted) {
-      chatGreeted = true
-      addChatMsg('ai', '你好！我是 PennyWise 的 AI 助手 🤖\n\n· 发交易文本给我直接记账（如"全家便利店 18.5 元"）\n· 问账目（如"这个月餐饮花了多少"）\n· 求平替（如"想买 100 元的洗发水，有更好的推荐吗"）')
-    }
-    $('chat-input').focus()
-  })
-  $('[data-close-chat]').addEventListener('click', () => $('chat-modal').classList.add('hidden'))
-  $('chat-modal').addEventListener('click', (e) => {
-    if (e.target === $('chat-modal')) $('chat-modal').classList.add('hidden')
-  })
-  function addChatMsg(who, text) {
-    const el = document.createElement('div')
-    el.className = 'msg ' + who
-    el.textContent = text
-    $('chat-msgs').appendChild(el)
-    $('chat-msgs').scrollTop = $('chat-msgs').scrollHeight
-  }
-  async function sendChat() {
-    const text = $('chat-input').value.trim()
-    if (!text) return
-    $('chat-input').value = ''
-    addChatMsg('user', text)
-    try {
-      const d = await api('/api/agent', { method: 'POST', body: { text } })
-      addChatMsg('ai', d.reply || '（没有回复）')
-      if (d.kind === 'record') {
-        syncNow()
-        renderList().catch(() => {})
-        renderStats().catch(() => {})
-      }
-    } catch (e) {
-      addChatMsg('ai', '发送失败：' + e.message)
-    }
-  }
-  $('chat-send').addEventListener('click', sendChat)
-  $('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat() })
 
   // ---------- 锁定屏 ----------
   function showLock() {

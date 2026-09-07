@@ -84,12 +84,6 @@ $sec = curl.exe -s -i "$base/" | Select-String 'Content-Security-Policy|X-Conten
 Check 'security headers present' (($sec | Measure-Object).Count -ge 3)
 Check 'health reports autoConfirm' ([double]$h.autoConfirm -ge 0 -and [double]$h.autoConfirm -le 1)
 Check 'health reports modelStatus' ($null -ne $h.modelStatus -and $null -ne $h.modelStatus.text -and $null -ne $h.modelStatus.vision)
-# 1e. AI agent endpoint: empty text must be 400 (no LLM call, zero cost)
-$agent400 = $false
-try {
-  Invoke-WebRequest -UseBasicParsing -Method POST -Uri "$base/api/agent" -Headers @{ 'X-Auth-Token' = $token } -ContentType 'application/json' -Body '{"text":""}' -ErrorAction Stop | Out-Null
-} catch { $agent400 = ([int]$_.Exception.Response.StatusCode.value__ -eq 400) }
-Check 'agent rejects empty text (400)' $agent400
 $rp = Call GET '/api/report/preview?lite=1'
 Check 'report preview builds' ($rp.ok -and $null -ne $rp.data.text -and $rp.data.text.Length -gt 20)
 # 账单核验（空月份：无 LLM 调用、秒回）
