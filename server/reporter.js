@@ -2,7 +2,7 @@ import { db } from './db.js'
 import { env } from './env.js'
 import { llmConfig } from './llm.js'
 import { analyzeBillForAlternatives } from './recommend.js'
-import nodemailer from 'nodemailer'
+// nodemailer 改为 sendEmail 内动态加载：只有真发信才需要，冷启动不再背着它
 
 // ================= 月度报告（邮箱 / Server酱微信推送） =================
 
@@ -282,6 +282,7 @@ ${trendBarsHtml(monthlyTrend(s.month))}
 export async function sendEmail(subject, html) {
   const cfg = mailerConfig()
   if (!cfg.enabled) return { ok: false, error: '未配置 SMTP（SMTP_HOST/SMTP_USER/SMTP_PASS）' }
+  const nodemailer = (await import('nodemailer')).default
   const transporter = nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,

@@ -1,4 +1,4 @@
-﻿# PennyWise ensure-server: start the ledger server if (and only if) it is not already running.
+# PennyWise ensure-server: start the ledger server if (and only if) it is not already running.
 # Used by open.vbs (manual open) and ghost.ps1 (idle auto-start). Ghost mode has no tray.
 # - Double-checks the port owner before spawning: on a busy machine a TCP probe can time out
 #   while the old server is still alive -> without this check we would double-start
@@ -32,6 +32,8 @@ if (-not (Test-Port)) {
   if (-not $listener) {
     $nodeExe = Join-Path $env:ProgramFiles 'nodejs\node.exe'
     if (-not (Test-Path $nodeExe)) { $nodeExe = 'node.exe' }
+    # V8 compile cache: subsequent cold starts skip recompiling express/xlsx/... (Node >= 22.1)
+    $env:NODE_COMPILE_CACHE = Join-Path $root 'data\compile-cache'
     foreach ($p in @($outLog, $errLog)) {
       try {
         $f = Get-Item $p -ErrorAction SilentlyContinue

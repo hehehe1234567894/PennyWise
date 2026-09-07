@@ -3,9 +3,8 @@ import path from 'node:path'
 import { env, DATA_DIR } from './env.js'
 import { db, ruleFor, upsertRule, nowIso, validTs, newUid, nextRev } from './db.js'
 import { llmConfig } from './llm.js'
-import { ImapFlow } from 'imapflow'
-import AdmZip from 'adm-zip'
-import XLSX from 'xlsx'
+// imapflow/adm-zip/xlsx 改为用时动态加载（见 importBills/tryUnzipParse/xlsxToRows）：
+// 只在账单导入时用得到，却占冷启动约 700ms（351+324+26ms），平时打开账本完全不需要
 
 const INBOX_DIR = path.join(DATA_DIR, 'inbox')
 
@@ -49,8 +48,9 @@ export function parseCsv(text) {
   return rows.filter((r) => r.some((c) => String(c).trim() !== ''))
 }
 
-export function xlsxToRows(buf) {
+export async function xlsxToRows(buf) {
   try {
+    const XLSX = (await import('xlsx')).default
     const wb = XLSX.read(buf, { type: 'buffer' })
     const ws = wb.Sheets[wb.SheetNames[0]]
     return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })
@@ -138,8 +138,8 @@ export function parseWechatRows(rows) {
   return { rows: out }
 }
 export function parseWechatCsv(text) { return parseWechatRows(parseCsv(text)) }
-export function parseWechatXlsx(buf) {
-  const rows = xlsxToRows(buf)
+export async function parseWechatXlsx(buf) {
+  const rows = await xlsxToRows(buf)
   if (!rows.length) return { rows: [], error: 'xlsx 无法读取' }
   return parseWechatRows(rows)
 }
@@ -560,7 +560,7 @@ export async function parseBillFile(name, buf, kindHint) {
   const isXlsx = /\.xlsx?$/i.test(name)
   const isHtml = /\.html?$/i.test(name) || /<table/i.test(buf.toString('latin1').slice(0, 4000))
   if (isXlsx) {
-    const rows = xlsxToRows(buf)
+    const rows = await xlsxToRows(buf)
     if (!rows.length) return { rows: [], error: 'xlsx 无法读取' }
     return await parseRowsSmart(rows, kindHint || (/支付宝/i.test(name) ? 'alipay' : /微信/i.test(name) ? 'wechat' : null))
   }
@@ -655,6 +655,7 @@ function savePasswordHistory(list) {
 // 解压 zip 并解析其中 CSV/XLSX 为行数组（密码必须显式传给 getData；zipKind 为平台提示）
 export async function tryUnzipParse(filePath, password, zipKind) {
   try {
+    const AdmZip = (await import('adm-zip')).default
     const zip = new AdmZip(filePath)
     const entries = zip.getEntries(password).filter((e) => !e.isDirectory)
     const rows = []
@@ -780,6 +781,7 @@ function senderKind(from) {
 // ---- 主流程：从邮箱收取账单并导入 ----
 export async function importBills(cfg) {
   if (!cfg.billsEnabled) return { imported: 0, skipped: 0, error: '未配置账单邮件导入（MAIL_* / AUTO_IMPORT）' }
+  const ImapFlow = (await import('imapflow')).default
   const client = new ImapFlow({
     host: cfg.host,
     port: cfg.port,
