@@ -4,7 +4,6 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import express from 'express'
-import QRCode from 'qrcode'
 import { env, writeEnv, DATA_DIR, PUBLIC_DIR } from './env.js'
 import { db, getCategories, normalizeCategory, ruleFor, upsertRule, nowIso, validTs, getTx, currentMonth, newUid, currentRev, nextRev, bumpTx, txToSync } from './db.js'
 import { parseImage, llmConfig, visionConfig, getModelStatus, noteModelResult } from './llm.js'
@@ -19,10 +18,6 @@ import { pushEvent, recentEvents, onEvent } from './notify.js'
 
 const PORT = Number(env('PORT', '8720')) || 8720
 const AUTH_TOKEN = env('AUTH_TOKEN', '')
-
-// 幽灵模式节流：账本是后台服务，降到低于正常优先级——45 天邮件重扫、LLM 解析等
-// 突发负载永远不抢前台应用的 CPU（沙箱/受限环境里外部改优先级会被拒，自设最可靠）
-try { os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* 忽略 */ }
 
 // 自动入账阈值：解析置信度 ≥ 阈值 → 直接入账，无需确认；1 = 全部手动确认
 function autoConfirmAt() {
@@ -197,6 +192,7 @@ app.get('/api/qr', async (req, res) => {
   if (!text || text.length > 800) return fail(res, 400, 'bad_request', 'text 为空或过长')
   const width = Math.min(Math.max(Number(req.query.size) || 220, 100), 600)
   try {
+    const QRCode = (await import('qrcode')).default // 懒加载：二维码只在配对扫码时用得到
     const svg = await QRCode.toString(text, { type: 'svg', margin: 1, width, errorCorrectionLevel: 'M' })
     res.set('Content-Type', 'image/svg+xml').set('Cache-Control', 'no-store').send(svg)
   } catch (e) {
@@ -828,6 +824,9 @@ app.use((err, req, res, next) => {
 })
 
 const server = app.listen(PORT, '0.0.0.0', () => {
+  // 就绪后再降到低于正常优先级：启动阶段保持 Normal 优先抢 CPU（冷启动更快），
+  // 起完退到后台——45 天邮件重扫、LLM 解析等突发负载永远不抢前台应用的 CPU
+  try { os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL) } catch { /* 忽略 */ }
   try { fs.writeFileSync(path.join(DATA_DIR, 'server.pid'), String(process.pid)) } catch {}
   // 账单邮件自动导入：启动 15 秒首次执行，此后每 12 小时一次（只读白名单发件人）。
   // 防抖：导入会重扫近 45 天邮件（下载+解析+LLM），距上次尝试不足 6 小时的重启跳过补扫，
