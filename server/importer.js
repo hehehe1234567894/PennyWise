@@ -602,11 +602,12 @@ export function extractPassword(subject, text) {
   if (/微信密码/.test(subj)) kind = 'wechat'
   else if (/支付宝密码/.test(subj)) kind = 'alipay'
   else if (!/密码/.test(subj + '\n' + body)) return null
+  const isSentinel = (s) => /^(NONE|NULL|EMPTY|PASS|NOPASS)$/i.test(s)
   const clean = body.replace(/[\s\u3000]/g, '')
-  if (/^[A-Za-z0-9]{4,16}$/.test(clean)) return { kind, password: clean }
+  if (/^[A-Za-z0-9]{4,16}$/.test(clean) && !isSentinel(clean)) return { kind, password: clean }
   const s = subj + '\n' + body
   const m = s.match(/解压密码[：: ]*(?:是|为)?\s*([A-Za-z0-9]{4,16})/) || s.match(/密码[：: ]*(?:是|为)?\s*([A-Za-z0-9]{4,16})/)
-  if (m) return { kind, password: m[1] }
+  if (m && !isSentinel(m[1])) return { kind, password: m[1] }
   return { kind, password: '' } // 有密码邮件但规则提取失败 → 调用方走 LLM 兜底
 }
 
@@ -630,7 +631,10 @@ export async function extractPasswordLlm(subject, text) {
     if (!res.ok) return null
     const j = await res.json()
     const p = String(j?.choices?.[0]?.message?.content || '').trim()
-    return /^[A-Za-z0-9]{4,16}$/.test(p) ? p : null
+    // 只收 4-16 位字母数字，且排除 LLM 找不到时输出的哨兵词（NONE/None/null/无 等），防假密码混入历史
+    if (!/^[A-Za-z0-9]{4,16}$/.test(p)) return null
+    if (/^(NONE|NULL|EMPTY|PASS|12345678|NOPASS)$/i.test(p)) return null
+    return p
   } catch { return null }
 }
 
@@ -781,7 +785,8 @@ function senderKind(from) {
 // ---- 主流程：从邮箱收取账单并导入 ----
 export async function importBills(cfg) {
   if (!cfg.billsEnabled) return { imported: 0, skipped: 0, error: '未配置账单邮件导入（MAIL_* / AUTO_IMPORT）' }
-  const ImapFlow = (await import('imapflow')).default
+  const imapMod = await import('imapflow')
+  const ImapFlow = imapMod.ImapFlow || imapMod.default || imapMod // 兼容 ESM 命名导出与 CJS default 两种形态
   const client = new ImapFlow({
     host: cfg.host,
     port: cfg.port,
@@ -794,6 +799,9 @@ export async function importBills(cfg) {
   const newZips = []
   const passwords = []
   const allRows = []
+  // 错误收集：任何一封账单解析/下载/解压失败都显式记录，返回给调用方展示（不再静默吞掉）
+  const errors = []
+  const noteError = (tag, detail) => { errors.push(`${tag}: ${String(detail || '').slice(0, 200)}`) }
   try {
     const since = new Date(Date.now() - 45 * 24 * 3600 * 1000)
     for await (const msg of client.fetch({ since }, { envelope: true, source: true }, { uid: true })) {
@@ -819,6 +827,7 @@ export async function importBills(cfg) {
         if (/\.zip$/i.test(f.name)) newZips.push({ name: f.name, buffer: f.buffer, kind })
         else if (/\.(csv|xlsx?|html?)$/i.test(f.name)) {
           const parsed = await parseBillFile(f.name, f.buffer, kind)
+          if (parsed.error) noteError(`${subject.slice(0, 40)} 附件 ${f.name} 解析失败`, parsed.error)
           allRows.push(...parsed.rows)
         }
       }
@@ -826,16 +835,18 @@ export async function importBills(cfg) {
       const links = extractLinks(text).filter((l) => /wechatpay|tenpay|weixin|qpay|alipay|bank/i.test(l))
       for (const link of links.slice(0, 3)) {
         const dl = await downloadBillFile(link)
-        if (!dl) continue
+        if (!dl) { noteError(`${subject.slice(0, 40)} 链接下载失败`, link.slice(0, 120) + '（链接可能已过期，请重新获取账单邮件）'); continue }
         if (dl.kind === 'zip') newZips.push({ name: 'link-' + Date.now() + '.zip', buffer: dl.buffer, kind })
         else {
           const parsed = await parseBillFile('link-' + Date.now() + (kind === 'alipay' ? '.xlsx' : '.csv'), dl.buffer, kind)
+          if (parsed.error) noteError(`${subject.slice(0, 40)} 链接账单解析失败`, parsed.error)
           allRows.push(...parsed.rows)
         }
       }
       // 支付宝账单：流水表格直接渲染在正文 HTML 里 → 直接解析表格
       if (kind === 'alipay' && /<table/i.test(text) && /交易号/.test(text)) {
         const parsed = await parseBillFile('body.html', Buffer.from(text, 'utf8'), 'alipay')
+        if (parsed.error) noteError(`${subject.slice(0, 40)} 正文表格解析失败`, parsed.error)
         allRows.push(...parsed.rows)
       }
     }
@@ -861,6 +872,7 @@ export async function importBills(cfg) {
       ...allPw.filter((x) => x.kind !== p.kind && x.kind !== 'any'),
     ]
     let done = false
+    let lastErr = ''
     for (const entry of ordered) {
       const r = await tryUnzipParse(path.join(INBOX_DIR, p.file), entry.password, p.kind)
       if (r.ok) {
@@ -869,22 +881,31 @@ export async function importBills(cfg) {
         done = true
         break
       }
+      lastErr = r.error || (r.badPassword ? '密码不对（尝试了密码历史中的 ' + ordered.length + ' 个候选）' : '')
     }
-    if (!done) still.push(p)
+    if (!done) {
+      still.push(p)
+      noteError(`${p.name.slice(0, 40)} 解压失败`, lastErr || '未知错误，已挂起等密码，14 天后自动清理')
+    }
   }
   const fresh = []
   for (const p of still) {
     if (Date.now() - Date.parse(p.savedAt || nowIso()) < 14 * 24 * 3600 * 1000) fresh.push(p)
-    else fs.rmSync(path.join(INBOX_DIR, p.file), { force: true })
+    else {
+      noteError(`${p.name.slice(0, 40)} 已过期清理`, '挂起超过 14 天无密码，文件已删除，账单无法补导——请重新下载账单邮件')
+      fs.rmSync(path.join(INBOX_DIR, p.file), { force: true })
+    }
   }
   savePendingZips(fresh)
-  savePasswordHistory([...passwords, ...passwordHistory()].slice(-20))
+  const pwSentinel = (x) => /^(NONE|NULL|EMPTY|PASS|NOPASS)$/i.test(String(x.password || ''))
+  savePasswordHistory([...passwords, ...passwordHistory()].filter((x) => !pwSentinel(x)).slice(-20))
   // 全部账单行汇总后：一次性对账（LLM 合并审核 + 去重入库）
   const rec = await reconcileAndImport(allRows)
   return {
     imported: rec.imported, skipped: rec.skipped, merged: rec.merged,
     reviewedPairs: rec.reviewedPairs, categorized: rec.categorized,
     mergeError: rec.mergeError || '',
+    errors,
     error: '', files: newZips.length, passwords: passwords.length,
   }
 }

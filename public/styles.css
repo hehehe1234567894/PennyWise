@@ -562,6 +562,12 @@ label { display: block; font-size: 13px; color: var(--dim); margin: 11px 0 4px; 
   background: var(--red); box-shadow: 0 0 0 2px var(--bg2);
 }
 .mail-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+.mail-import-errors {
+  background: var(--pink); color: #7a1f1a; border-radius: 12px; padding: 8px 12px;
+  font-size: 12.5px; line-height: 1.55; width: 100%;
+}
+.mail-import-errors ul { margin: 4px 0 0 18px; padding: 0; }
+.mail-import-errors li { word-break: break-all; }
 .mail-feed { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; padding-right: 4px; }
 .feed-item {
   display: flex; align-items: flex-start; gap: 10px;

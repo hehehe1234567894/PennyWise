@@ -1436,6 +1436,12 @@
       $('mail-status-chips').innerHTML =
         chip(bi.enabled ? 'chip-ok' : 'chip-off', bi.enabled ? '账单导入已开启' : '账单导入未开启') +
         (bi.lastRun ? chip('chip-warn', '上次导入 ' + fmtTs(bi.lastRun)) : '')
+      // 上次导入的失败明细：解析/下载/解压失败不再静默——直接红条列给用户看
+      const errs = (bi.errors || []).filter(Boolean)
+      if (errs.length) {
+        $('mail-status-chips').insertAdjacentHTML('beforeend',
+          `<div class="mail-import-errors">⚠ ${errs.length} 处账单处理失败（请重新获取账单邮件或检查密码）：<ul>${errs.slice(0, 10).map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`)
+      }
     } catch (e) { /* 静默 */ }
     await refreshMailFeed()
   }

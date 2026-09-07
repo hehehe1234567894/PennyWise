@@ -260,7 +260,7 @@ app.post('/api/capture', async (req, res) => {
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----
 const liveEvents = new EventEmitter()
-const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, merged: 0, reviewedPairs: 0, categorized: 0, passwords: 0, error: '' }
+const billStatus = { enabled: false, lastRun: null, imported: 0, skipped: 0, merged: 0, reviewedPairs: 0, categorized: 0, passwords: 0, error: '', errors: [] }
 async function runBillImport() {
   billStatus.enabled = mailConfig().billsEnabled
   try {
@@ -275,15 +275,17 @@ async function runBillImport() {
     billStatus.categorized = r.categorized || 0
     billStatus.passwords = r.passwords || 0
     billStatus.error = r.error || ''
+    billStatus.errors = Array.isArray(r.errors) ? r.errors.slice(0, 20) : []
     // 记录最近一次成功收到账单的时间（月报用它判断是否需要提醒）
     if (!r.error && r.files > 0) {
       db.prepare("INSERT INTO meta (k, v) VALUES ('last_bill_import', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(nowIso())
-      // 只有真的有变化才打扰用户：重复检查同一批邮件（新增 0 合并 0）不再发事件/红点
-      if ((r.imported || 0) > 0 || (r.merged || 0) > 0) {
+      const errNote = (r.errors || []).length ? `；⚠ ${r.errors.length} 处失败（解析/下载/解压），见邮箱账单页` : ''
+      // 有实质变化 或 有失败需要知晓 → 都提示（失败也必须有红点，不再静默）
+      if ((r.imported || 0) > 0 || (r.merged || 0) > 0 || (r.errors || []).length > 0) {
         // 通知已打开的网页：月度账单处理完成，刷新账本
-        liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files })
+        liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files, errors: (r.errors || []).length })
         // 事件中心：顶栏红点 + 邮箱动态（账单邮件处理完成）
-        pushEvent('bill', '账单邮件处理完成', `收到 ${r.files} 封账单邮件：新增 ${r.imported || 0} 笔，合并重复 ${r.merged || 0} 笔，跳过 ${r.skipped || 0} 笔${r.mergeError ? `；⚠ 合并审核失败(${r.mergeError})，新增可能含重复` : ''}`)
+        pushEvent('bill', '账单邮件处理完成', `收到 ${r.files} 封账单邮件：新增 ${r.imported || 0} 笔，合并重复 ${r.merged || 0} 笔，跳过 ${r.skipped || 0} 笔${r.mergeError ? `；⚠ 合并审核失败(${r.mergeError})，新增可能含重复` : ''}${errNote}`)
       }
     }
     return r
@@ -291,6 +293,7 @@ async function runBillImport() {
     billStatus.lastRun = nowIso()
     try { db.prepare("INSERT INTO meta (k, v) VALUES ('last_import_attempt', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(Date.now())) } catch { /* 忽略 */ }
     billStatus.error = String(e?.message || e).slice(0, 200)
+    billStatus.errors = []
     return { imported: 0, skipped: 0, passwords: 0, error: billStatus.error }
   }
 }
