@@ -11,7 +11,6 @@ import { mailConfig, importBills, importBillRows, parseWechatCsv, parseAlipayCsv
 import { mailerConfig, serverChanKey, summarizeMonth, buildReportText, buildReportHtml, sendMonthlyReport, generateReportNarrative } from './reporter.js'
 import { analyzeBillForAlternatives } from './recommend.js'
 import { auditMonth, buildAuditCsv } from './audit.js'
-import { agentChat } from './agent.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 import { pushEvent, recentEvents, onEvent } from './notify.js'
@@ -257,14 +256,6 @@ app.post('/api/capture', async (req, res) => {
 
   const r = await captureTextCore(text, clientId, 'text', autoConfirmAt())
   res.status(201).json({ ok: true, data: r })
-})
-
-// ---- AI 助手（网页聊天） ----
-app.post('/api/agent', async (req, res) => {
-  const { text } = req.body || {}
-  if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
-  const r = await agentChat(text, autoConfirmAt())
-  res.json({ ok: true, data: r })
 })
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----

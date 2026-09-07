@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -17,14 +17,13 @@
   <aside id="sidebar" class="sidebar">
     <div class="side-logo">
       <span class="logo-mark">💰</span>
-      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v46</span></div>
+      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v26.9.7</span></div>
     </div>
     <nav class="side-nav">
       <button class="side-item active" data-tab="list"><span class="side-ico">📄</span><span>流水</span></button>
       <button class="side-item" data-tab="stats"><span class="side-ico">📊</span><span>统计</span></button>
       <button class="side-item" data-tab="fin"><span class="side-ico">🐷</span><span>理财</span></button>
       <button class="side-item" data-tab="mail"><span class="side-ico">📬</span><span>邮箱账单</span><span class="mail-dot hidden"></span></button>
-      <button class="side-item" id="side-chat"><span class="side-ico">🤖</span><span>AI 助手</span></button>
     </nav>
     <div class="side-foot">
       <button class="side-item" id="side-settings"><span class="side-ico">⚙️</span><span>设置</span></button>
@@ -141,19 +140,6 @@
     <button class="tab" data-tab="fin"><span class="tab-ico">🐷</span><span>理财</span></button>
     <button class="tab" data-tab="mail"><span class="tab-ico">📬</span><span>邮箱</span></button>
   </nav>
-
-  <button id="btn-chat" class="chat-fab" title="AI 助手">🤖</button>
-
-  <div id="chat-modal" class="modal hidden">
-    <div class="modal-card chat-card">
-      <div class="modal-head"><span>🤖 AI 助手</span><button class="icon-btn" data-close-chat>✕</button></div>
-      <div id="chat-msgs" class="chat-msgs"></div>
-      <div class="chat-input-row">
-        <input id="chat-input" type="text" placeholder="问账目 / 求平替推荐…" autocomplete="off">
-        <button id="chat-send" class="btn btn-primary">发送</button>
-      </div>
-    </div>
-  </div>
 
   <div id="modal" class="modal hidden">
     <div class="modal-card">
