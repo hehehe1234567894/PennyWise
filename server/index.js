@@ -274,6 +274,7 @@ async function runBillImport() {
     billStatus.skipped = r.skipped
     billStatus.merged = r.merged || 0
     billStatus.reviewedPairs = r.reviewedPairs || 0
+    billStatus.deterministic = r.deterministic || 0
     billStatus.categorized = r.categorized || 0
     billStatus.passwords = r.passwords || 0
     billStatus.error = r.error || ''
@@ -287,7 +288,7 @@ async function runBillImport() {
         // 通知已打开的网页：月度账单处理完成，刷新账本
         liveEvents.emit('bills', { imported: r.imported || 0, skipped: r.skipped || 0, files: r.files, errors: (r.errors || []).length })
         // 事件中心：顶栏红点 + 邮箱动态（账单邮件处理完成）
-        pushEvent('bill', '账单邮件处理完成', `收到 ${r.files} 封账单邮件：新增 ${r.imported || 0} 笔，合并重复 ${r.merged || 0} 笔，跳过 ${r.skipped || 0} 笔${r.mergeError ? `；⚠ 合并审核失败(${r.mergeError})，新增可能含重复` : ''}${errNote}`)
+        pushEvent('bill', '账单邮件处理完成', `收到 ${r.files} 封账单邮件：新增 ${r.imported || 0} 笔，合并重复 ${(r.merged || 0) + (r.deterministic || 0)} 笔（其中程序直并 ${r.deterministic || 0} 笔），跳过 ${r.skipped || 0} 笔${r.mergeError ? `；⚠ 合并审核失败(${r.mergeError})，新增可能含重复` : ''}${errNote}`)
       }
     }
     return r
@@ -792,16 +793,16 @@ app.post('/api/classify', async (req, res) => {
   } catch (e) { fail(res, 500, 'classify_error', String(e?.message || e).slice(0, 200)) }
 })
 
-// ---- 数据质量体检：先程序合并预处理（apply），再 LLM 复核剩余异常（只给意见不改账） ----
-// month 缺省 = 全量体检
+// ---- 数据质量体检：先程序合并预处理（apply），再可选 LLM 复核剩余异常（只给意见不改账） ----
+// month 缺省 = 全量体检；llm=1 / {llm:true} 才调用模型复核（默认纯程序，秒回零 token）
 app.get('/api/quality', async (req, res) => {
-  try { res.json({ ok: true, data: await qualityCheck({ month: optMonth(req.query.month), apply: false }) }) }
+  try { res.json({ ok: true, data: await qualityCheck({ month: optMonth(req.query.month), apply: false, llm: req.query.llm === '1' }) }) }
   catch (e) { fail(res, 500, 'quality_error', String(e?.message || e).slice(0, 200)) }
 })
 app.post('/api/quality', async (req, res) => {
   try {
     const b = req.body || {}
-    const data = await qualityCheck({ month: optMonth(b.month), apply: b.apply === true })
+    const data = await qualityCheck({ month: optMonth(b.month), apply: b.apply === true, llm: b.llm === true })
     res.json({ ok: true, data })
   } catch (e) { fail(res, 500, 'quality_error', String(e?.message || e).slice(0, 200)) }
 })

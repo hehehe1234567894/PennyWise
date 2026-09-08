@@ -7,6 +7,21 @@ export function llmConfig() {
   return { base, apiKey, model, enabled: Boolean(apiKey) }
 }
 
+// 通用模型链：qwen（VISION_API_KEY，便宜且长文本强）优先 → 主 LLM（DeepSeek）托底。
+// 主模型欠费/异常时批量任务（合并审核/批量分类）自动切到下一档，不再整批失败。
+export function llmChain() {
+  const chain = []
+  const vKey = env('VISION_API_KEY')
+  const qModel = env('LLM_CHAIN_MODEL', env('AUDIT_MODEL', 'qwen3.8-flash'))
+  if (vKey) chain.push({
+    base: env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, ''),
+    key: vKey, model: qModel, label: qModel,
+  })
+  const cfg = llmConfig()
+  if (cfg.enabled) chain.push({ base: cfg.base, key: cfg.apiKey, model: cfg.model, label: cfg.model })
+  return chain
+}
+
 export const SYSTEM_PROMPT = `你是"PennyWise"个人记账系统的交易解析器。用户会把微信/支付宝/银行卡的交易通知或一句话描述发给你。你只输出一个 JSON 对象，不要输出任何其他文字、解释或代码块标记。
 字段说明：
 - amount: 交易金额（人民币元，正数，最多两位小数）；无法确定时填 null

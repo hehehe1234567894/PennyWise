@@ -1100,6 +1100,8 @@
       : (d.apply ? '<p class="hint">程序修复：没有需要修复的问题。</p>' : '')
     const llmHtml = d.llm?.note
       ? `<p class="hint">🤖 AI 复核${d.llm.ok ? `（${esc(d.llm.model)}）` : '（未调用）'}：${esc(d.llm.note)}</p>` : ''
+    const llmOff = d.llm && d.llm.enabled === false && (s.dupFuzzy || s.missing || s.formatErrors || s.inconsistent)
+      ? '<p class="hint">💡 以上疑似项可勾选「🤖 附带 AI 复核」让模型逐项判断。</p>' : ''
     const itemsHtml = (d.items || []).slice(0, 20).map((it) => {
       const t0 = it.txs?.[0]
       const t1 = it.txs?.[1]
@@ -1115,7 +1117,7 @@
       </div>`
     }).join('')
     const more = (d.items || []).length > 20 ? `<p class="hint">…仅显示前 20 条（共 ${d.items.length} 条）</p>` : ''
-    $('qa-result').innerHTML = `<div class="qa-chips">${chips}</div>${fixedHtml}${llmHtml}${itemsHtml}${more}`
+    $('qa-result').innerHTML = `<div class="qa-chips">${chips}</div>${fixedHtml}${llmHtml}${llmOff}${itemsHtml}${more}`
   }
 
   // ---------- 设置 ----------
@@ -1184,12 +1186,15 @@
       </div>
       <p id="audit-status" class="hint"></p>
       <h3>数据体检</h3>
-      <p class="hint">排查重复（精确 / 疑似）、缺失字段、格式错误、字段不一致。顺序严格遵循「先程序后模型」：程序先做合并与安全修复（零风险、可同步），再把剩余异常分批交给 AI 复核——AI 只给意见，不改账。月份留空 = 全库体检。</p>
+      <p class="hint">排查重复（精确 / 疑似）、缺失字段、格式错误、字段不一致。默认<b>纯程序体检</b>——秒回、零 token，安全修复（合并重复 / 规则补分类 / 字段归一）全部确定性执行；勾选「AI 复核」才会把剩余疑似异常交给模型判断（AI 只给意见，不改账）。月份留空 = 全库体检。</p>
       <div class="btn-row">
         <input id="qa-month" type="month" class="month-input">
         <button type="button" class="btn" id="btn-qa-check">🩺 开始体检</button>
         <button type="button" class="btn" id="btn-qa-fix">🩹 修复并复检</button>
       </div>
+      <label style="display:flex;align-items:center;gap:7px;margin:8px 0 0;font-size:13px;color:var(--dim);cursor:pointer">
+        <input type="checkbox" id="qa-llm" style="width:auto"> 🤖 附带 AI 复核（慢，最长约 2 分钟）
+      </label>
       <p id="qa-status" class="hint"></p>
       <div id="qa-result"></div>
       <h3>月报提醒</h3>
@@ -1242,13 +1247,14 @@
         refreshAll()
       } catch (e) { st.textContent = '✗ ' + e.message }
     })
-    // 数据体检：GET 检查 + AI 复核；POST 先程序安全修复再复检
+    // 数据体检：默认纯程序（秒回零 token）；勾选「AI 复核」才调用模型
     $('btn-qa-check').addEventListener('click', async () => {
       const st = $('qa-status')
       const month = $('qa-month').value
-      st.textContent = '体检中…（有异常时含 AI 复核，最长约 2 分钟）'
+      const useLlm = $('qa-llm').checked
+      st.textContent = useLlm ? '体检 + AI 复核中…（最长约 2 分钟）' : '体检中…'
       try {
-        const d = await api('/api/quality' + (month ? `?month=${encodeURIComponent(month)}` : ''))
+        const d = await api('/api/quality' + (month ? `?month=${encodeURIComponent(month)}` : '') + (useLlm ? `${month ? '&' : '?'}llm=1` : ''))
         st.textContent = '✓ 体检完成（只报告，未改动任何数据）'
         renderQuality(d)
       } catch (e) { st.textContent = '✗ ' + e.message }
@@ -1256,10 +1262,11 @@
     $('btn-qa-fix').addEventListener('click', async () => {
       const st = $('qa-status')
       const month = $('qa-month').value
-      if (!confirm('将按「先程序后模型」执行：\n① 程序安全修复（合并精确重复、按规则记忆补分类、字段归一）——零风险可同步；\n② AI 复核剩余异常，只给意见不改账。\n继续？')) return
-      st.textContent = '修复 + 复检中…'
+      const useLlm = $('qa-llm').checked
+      if (!confirm('将执行程序安全修复：\n① 合并精确重复（含 60 秒内同商户同金额的手记双击型）；\n② 按规则记忆补分类、字段归一。\n全部确定性执行、可同步到手机。继续？')) return
+      st.textContent = useLlm ? '修复 + AI 复核中…' : '修复 + 复检中…'
       try {
-        const d = await api('/api/quality', { method: 'POST', body: { month, apply: true } })
+        const d = await api('/api/quality', { method: 'POST', body: { month, apply: true, llm: useLlm } })
         st.textContent = '✓ 修复并复检完成'
         renderQuality(d)
         refreshAll()

@@ -2,24 +2,10 @@
 // 流程：扫描"分类为空/其他"的支出记录 → 按 商户+商品 去重 → 分批（每批 40 组）一次调用 LLM →
 //       输出结构化 JSON（下标对齐 + 枚举校验）→ 写回账本分类并沉淀规则记忆（同商户下月起 0 token）。
 // 铁律：LLM 只输出枚举内的分类；越界/其他 一律不写回，宁缺毋滥。
-import { env } from './env.js'
 import { db, ruleFor, upsertRule, bumpTx, getCategories } from './db.js'
-import { llmConfig, noteModelResult } from './llm.js'
+import { llmChain, noteModelResult } from './llm.js'
 
 const BATCH_SIZE = 40
-
-// 分类模型链：qwen（视觉 Key 复用，默认 qwen3.8-flash）优先 → 主 LLM（DeepSeek）托底
-function classifyChain() {
-  const chain = []
-  const vKey = env('VISION_API_KEY')
-  if (vKey) {
-    const m = env('CLASSIFY_MODEL', env('AUDIT_MODEL', 'qwen3.8-flash'))
-    chain.push({ base: env('VISION_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/+$/, ''), key: vKey, model: m, label: m })
-  }
-  const cfg = llmConfig()
-  if (cfg.enabled) chain.push({ base: cfg.base, key: cfg.apiKey, model: cfg.model, label: cfg.model })
-  return chain
-}
 
 // 待分类候选：支出 + 分类为空或「其他」+ 有商户名（confirmed 与 pending 都算，pending 分类后确认更快）
 export function classifyCandidates(month) {
@@ -58,7 +44,7 @@ function ruleExamples(cats) {
 
 // 单批 LLM 推理：输入 [{i,m,g,x}]，输出 {"items":[{"i":0,"category":"餐饮"}]}；链上模型依次尝试
 async function llmClassifyBatch(items, examples) {
-  const chain = classifyChain()
+  const chain = llmChain()
   if (!chain.length) return { ok: false, error: 'no_llm' }
   const cats = getCategories().expense
   const sys = `你是记账分类助手。给你一组"商户+商品"组合（i 是序号），为每组从以下分类枚举中选一个最合适的：${cats.join(',')}。
@@ -66,6 +52,7 @@ async function llmClassifyBatch(items, examples) {
 该用户的历史归类习惯示例（仅供参考风格，尤其是软件/API/云服务类消费的归类倾向，不要照抄商户名）：${JSON.stringify(examples)}。
 只输出一个 JSON 对象：{"items":[{"i":序号,"category":"分类"}]}，items 必须覆盖全部输入序号，顺序不限。禁止输出枚举以外的分类。`
   let lastErr = ''
+  const legErrs = [] // 每一级模型的失败原因都保留，避免下一级报错掩盖上一级（如 qwen 超时被 DeepSeek 402 盖住）
   for (const p of chain) {
     try {
       const res = await fetch(`${p.base}/chat/completions`, {
@@ -81,20 +68,22 @@ async function llmClassifyBatch(items, examples) {
       })
       if (!res.ok) {
         const t = await res.text().catch(() => '')
+        legErrs.push(`${p.label}: http${res.status}`)
         lastErr = `${p.label} http${res.status} ${t.slice(0, 60)}`
-        if (p === chain[0]) noteModelResult('text', false, 'api_error', lastErr) // 主链路欠费等状态要透出给界面
+        if (p === chain[chain.length - 1]) noteModelResult('text', false, 'api_error', lastErr) // 主模型(DeepSeek)状态透出给界面
         continue
       }
       const j = await res.json()
       const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
       const parsed = JSON.parse(content)
-      if (!Array.isArray(parsed.items)) { lastErr = `${p.label} bad_items`; continue }
+      if (!Array.isArray(parsed.items)) { legErrs.push(`${p.label}: bad_items`); lastErr = `${p.label} bad_items`; continue }
       return { ok: true, items: parsed.items, model: p.label }
     } catch (e) {
+      legErrs.push(`${p.label}: ${String(e?.message || e).slice(0, 60)}`)
       lastErr = `${p.label} ${String(e?.message || e).slice(0, 80)}`
     }
   }
-  return { ok: false, error: lastErr || 'all_failed' }
+  return { ok: false, error: legErrs.join(' | ') || lastErr || 'all_failed' }
 }
 
 // 主流程：apply=false 只返回结构化预览；apply=true 写回分类 + 沉淀规则记忆

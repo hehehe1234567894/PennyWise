@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { env, DATA_DIR } from './env.js'
 import { db, ruleFor, upsertRule, nowIso, validTs, newUid, nextRev } from './db.js'
-import { llmConfig } from './llm.js'
+import { llmConfig, llmChain, classifyLlmError, noteModelResult } from './llm.js'
 // imapflow/adm-zip/xlsx 改为用时动态加载（见 importBills/tryUnzipParse/xlsxToRows）：
 // 只在账单导入时用得到，却占冷启动约 700ms（351+324+26ms），平时打开账本完全不需要
 
@@ -361,66 +361,80 @@ export async function importBillRows(rows) {
 }
 
 // LLM 合并决策：输入 [{bill:{t,a,d,m,g}, cands:[{id,t,a,m,g}]}]，输出一一对应的 match_id
+// 模型链：qwen 优先 → DeepSeek 托底（主模型欠费时合并审核不再整批失败）
 export async function llmMergeDecide(items) {
-  const cfg = llmConfig()
-  if (!cfg.enabled) return { ok: false, error: 'no_llm' }
+  const chain = llmChain()
+  if (!chain.length) return { ok: false, error: 'no_llm' }
   const sys = `你是记账对账助手。账单（微信/支付宝/银行导出的权威流水）需要与账本中已有的手记/截图记录合并去重。
 规则：
 1. 同一笔交易同时出现在账单行和已有记录中时，输出 match_id 为那条已有记录的 id（判断依据：时间相近±1天内、金额一致或相差不超过0.5元、商户/对方相同或明显是同一家、方向相同）；
 2. 账单行是新增交易（没有对应已有记录）时 match_id 为 null；
 3. 时间差超过2天或金额差超过0.5元时不要强行匹配；
 4. 只输出一个 JSON 对象：{"decisions":[{"bill_index":0,"match_id":123},{"bill_index":1,"match_id":null},...]}，bill_index 与输入 bills 数组一一对应。`
-  try {
-    const res = await fetch(`${cfg.base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
-        temperature: 0,
-        response_format: { type: 'json_object' },
-      }),
-      signal: AbortSignal.timeout(60000),
-    })
-    if (!res.ok) return { ok: false, error: 'http' + res.status }
-    const j = await res.json()
-    const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
-    const parsed = JSON.parse(content)
-    if (!Array.isArray(parsed.decisions)) return { ok: false, error: 'bad_decisions' }
-    return { ok: true, decisions: parsed.decisions }
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e).slice(0, 100) }
+  let lastErr = ''
+  for (const p of chain) {
+    try {
+      const res = await fetch(`${p.base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` },
+        body: JSON.stringify({
+          model: p.model,
+          messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
+          temperature: 0,
+          response_format: { type: 'json_object' },
+        }),
+        signal: AbortSignal.timeout(60000),
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => '')
+        lastErr = `http${res.status}`
+        if (p === chain[chain.length - 1]) noteModelResult('text', false, classifyLlmError(res.status, t), t.slice(0, 200)) // 主模型状态透出给界面
+        continue
+      }
+      const j = await res.json()
+      const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+      const parsed = JSON.parse(content)
+      if (!Array.isArray(parsed.decisions)) { lastErr = 'bad_decisions'; continue }
+      return { ok: true, decisions: parsed.decisions, model: p.label }
+    } catch (e) {
+      lastErr = String(e?.message || e).slice(0, 100)
+    }
   }
+  return { ok: false, error: lastErr }
 }
 
-// LLM 批量分类：商户去重后一次调用（商品名辅助判断），返回商户 → 分类映射
+// LLM 批量分类：商户去重后一次调用（商品名辅助判断），返回商户 → 分类映射（模型链同合并审核）
 export async function llmCategorizeMerchants(items) {
-  const cfg = llmConfig()
-  if (!cfg.enabled) return { ok: false, error: 'no_llm' }
+  const chain = llmChain()
+  if (!chain.length) return { ok: false, error: 'no_llm' }
   const sys = `你是记账分类助手。为每个商户/商品组合选择最合适的消费分类，只能从以下枚举中选一个：餐饮,交通,购物,娱乐,学习,日用品,医疗,通讯,住宿,运动,生活缴费,人情,其他。
 判断要点：商品名（g 字段）是分类的关键依据，商户名被脱敏（含**）时以商品名为准；同一商户可能对应多种消费（如淘宝购物/买菜），按商品名判断；无法判断时填"其他"。
 只输出一个 JSON 对象：{"categories":[{"m":"商户名","category":"餐饮"},...]}，与输入数组顺序一一对应。`
-  try {
-    const res = await fetch(`${cfg.base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
-        temperature: 0,
-        response_format: { type: 'json_object' },
-      }),
-      signal: AbortSignal.timeout(60000),
-    })
-    if (!res.ok) return { ok: false, error: 'http' + res.status }
-    const j = await res.json()
-    const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
-    const parsed = JSON.parse(content)
-    if (!Array.isArray(parsed.categories)) return { ok: false, error: 'bad_categories' }
-    return { ok: true, categories: parsed.categories }
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e).slice(0, 100) }
+  let lastErr = ''
+  for (const p of chain) {
+    try {
+      const res = await fetch(`${p.base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` },
+        body: JSON.stringify({
+          model: p.model,
+          messages: [{ role: 'system', content: sys }, { role: 'user', content: JSON.stringify(items) }],
+          temperature: 0,
+          response_format: { type: 'json_object' },
+        }),
+        signal: AbortSignal.timeout(60000),
+      })
+      if (!res.ok) { lastErr = `http${res.status}`; continue }
+      const j = await res.json()
+      const content = String(j?.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+      const parsed = JSON.parse(content)
+      if (!Array.isArray(parsed.categories)) { lastErr = 'bad_categories'; continue }
+      return { ok: true, categories: parsed.categories }
+    } catch (e) {
+      lastErr = String(e?.message || e).slice(0, 100)
+    }
   }
+  return { ok: false, error: lastErr }
 }
 
 // 对账主流程：ext_id 去重 → 候选对 → LLM 一次性审核合并 → LLM 批量分类 → 应用
@@ -443,6 +457,8 @@ export async function reconcileAndImport(rows) {
     ORDER BY ts LIMIT 6
   `)
   const pairs = []
+  const decisions = new Map()
+  let deterministic = 0 // 确定性直并数：严格匹配的对不经 LLM、零 token 直接合并
   for (let i = 0; i < fresh.length; i++) {
     const r = fresh[i]
     const t = Date.parse(r.ts)
@@ -450,11 +466,22 @@ export async function reconcileAndImport(rows) {
     const lo = new Date(t - 40 * 3600 * 1000).toISOString()
     const hi = new Date(t + 40 * 3600 * 1000).toISOString()
     const cands = candStmt.all(r.direction, r.amount - 0.05, r.amount + 0.05, lo, hi)
-    if (cands.length) pairs.push({ i, bill: r, cands })
+    if (!cands.length) continue
+    // 2.5) 确定性直并：金额一致(±0.005) + 商户完全一致(非空) + 同方向 + 时间差 ≤10min + 唯一候选。
+    //      这种对没有歧义，交给 LLM 纯属浪费——直接合并；模糊对才进模型审核。
+    if (cands.length === 1 && r.merchant) {
+      const c = cands[0]
+      const dt = Math.abs(Date.parse(c.ts) - t)
+      if (Math.abs(Number(c.amount) - Number(r.amount)) <= 0.005 && c.merchant === r.merchant && dt <= 10 * 60e3) {
+        decisions.set(i, c.id)
+        deterministic++
+        continue
+      }
+    }
+    pairs.push({ i, bill: r, cands })
   }
-  // 3) LLM 合并审核（只有存在疑似重复对时才调用，零候选 = 零 token）
+  // 3) LLM 合并审核（只审模糊对；确定性直并已在 2.5 完成。零模糊对 = 零 token）
   //    分批（每批 12 对）防超时；失败自动重试一次；彻底失败 → mergeError 明确上报，绝不静默混入重复
-  const decisions = new Map()
   let mergeError = ''
   if (pairs.length && env('BILL_LLM_MERGE', '1') === '1') {
     const CHUNK = 12
@@ -533,7 +560,7 @@ export async function reconcileAndImport(rows) {
     if (r.ext_id) insBillRow.run(r.ext_id, ts, r.amount, r.direction, r.merchant || '', r.goods_name || '', r.account || '', r.raw_text || '', 'inserted', Number(info.lastInsertRowid), uid, now)
     imported++
   }
-  return { imported, skipped, merged, reviewedPairs: pairs.length, categorized: catMap.size, mergeError }
+  return { imported, skipped, merged, deterministic, reviewedPairs: pairs.length, categorized: catMap.size, mergeError }
 }
 
 // 行数据 → 确定性解析（按平台提示）→ 失败 LLM 兜底 → 返回行数组（不入库）
@@ -903,6 +930,7 @@ export async function importBills(cfg) {
   const rec = await reconcileAndImport(allRows)
   return {
     imported: rec.imported, skipped: rec.skipped, merged: rec.merged,
+    deterministic: rec.deterministic || 0,
     reviewedPairs: rec.reviewedPairs, categorized: rec.categorized,
     mergeError: rec.mergeError || '',
     errors,

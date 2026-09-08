@@ -30,13 +30,11 @@ const view = (t) => ({
   status: t.status, ext_id: t.ext_id || '',
 })
 
-// ---- 第一步：程序确定性检查 ----
-function analyze(rows, cats) {
-  const items = []
-  const catList = new Set(cats)
-  const nowMs = Date.now()
-
-  // 1) 精确重复：业务字段完全一致（时间/金额/方向/商户/账户/来源），且不是"两个不同单号"的独立交易
+// ---- 精确重复组（检查与修复共用同一判定） ----
+// a) 业务字段完全一致（时间/金额/方向/商户/账户/来源），且不是"两个不同单号"的独立交易；
+// b) 手记双击型：同来源同商户同金额、60 秒内、双方都无账单单号 → 视同精确重复（可自动合并）
+function exactDupGroups(rows) {
+  const groups = []
   const sigMap = new Map()
   for (const t of rows) {
     const sig = [t.ts, t.amount, t.direction, t.merchant, t.account, t.source].join('|')
@@ -47,10 +45,40 @@ function analyze(rows, cats) {
     if (group.length < 2) continue
     const extIds = new Set(group.map((t) => t.ext_id || ''))
     if (extIds.size > 1 && group.every((t) => t.ext_id)) continue // 单号互不相同 = 各平台的独立交易，不算重复
-    items.push({ key: `dupx:${group.map((t) => t.uid).join(':')}`, kind: 'dup_exact', txs: group.map(view) })
+    groups.push(group)
+  }
+  if (groups.length >= 20) return groups
+  const man = rows.filter((t) => !t.ext_id)
+  for (let i = 0; i < man.length; i++) {
+    for (let j = i + 1; j < man.length; j++) {
+      const a = man[i], b = man[j]
+      if (a.direction !== b.direction || a.source !== b.source || a.account !== b.account) continue
+      if (!a.merchant || a.merchant !== b.merchant) continue
+      if (Math.abs(Number(a.amount) - Number(b.amount)) > 0.001) continue
+      const dt = Math.abs(Date.parse(a.ts) - Date.parse(b.ts))
+      if (Number.isNaN(dt) || dt > 60e3) continue
+      groups.push([a, b])
+      if (groups.length >= 20) return groups
+    }
+  }
+  return groups
+}
+
+// ---- 第一步：程序确定性检查 ----
+function analyze(rows, cats) {
+  const items = []
+  const catList = new Set(cats)
+  const nowMs = Date.now()
+
+  // 1) 精确重复（含手记双击型，可自动合并）
+  for (const group of exactDupGroups(rows)) {
+    const dbl = group.length === 2 && String(group[0].ts) !== String(group[1].ts)
+    items.push({ key: `dupx:${group.map((t) => t.uid).join(':')}`, kind: 'dup_exact', detail: dbl ? '同商户同金额 60 秒内（双击/重试型重复）' : '', txs: group.map(view) })
   }
 
-  // 2) 疑似重复对：a) 跨来源/都有单号（时间±40h、金额±0.05、同方向）；b) 同来源双击重复提交（同商户、金额±0.05、10 分钟内）
+  // 2) 疑似重复对：a) 跨来源/都有单号（时间±40h、金额±0.05、同方向）；b) 同来源短窗口（同商户、金额±0.05、10 分钟内）
+  //    全量收集后按"像真重复的程度"排序再截断：同商品 > 同商户且10分钟内 > 跨来源/都有单号 > 其他，
+  //    避免公交连刷这类高频正常消费把真正可疑的对挤出名额。
   const txs = rows.filter((t) => t.amount != null)
   const pairs = []
   for (let i = 0; i < txs.length; i++) {
@@ -62,13 +90,20 @@ function analyze(rows, cats) {
       if (Number.isNaN(dt)) continue
       if (a.ext_id && b.ext_id && a.ext_id === b.ext_id) continue
       const cross = (a.source === 'csv') !== (b.source === 'csv')
-      if ((cross || (a.ext_id && b.ext_id)) && dt <= 40 * 3600e3) pairs.push([a, b, ''])
-      else if (a.source === b.source && a.merchant && a.merchant === b.merchant && dt <= 10 * 60e3) pairs.push([a, b, 'short'])
-      if (pairs.length >= REVIEW_CAP) break
+      if ((cross || (a.ext_id && b.ext_id)) && dt <= 40 * 3600e3) pairs.push([a, b, dt])
+      else if (a.source === b.source && a.merchant && a.merchant === b.merchant && dt <= 10 * 60e3) pairs.push([a, b, dt])
     }
-    if (pairs.length >= REVIEW_CAP) break
   }
-  for (const [a, b] of pairs) {
+  const score = ([a, b, dt]) => {
+    let s = 0
+    if (a.goods_name && a.goods_name === b.goods_name) s -= 4
+    if (a.merchant && a.merchant === b.merchant && dt <= 10 * 60e3) s -= 3
+    else if (a.merchant && a.merchant === b.merchant) s -= 1
+    if (!a.goods_name && !b.goods_name) s += 1
+    return s
+  }
+  pairs.sort((x, y) => score(x) - score(y))
+  for (const [a, b] of pairs.slice(0, REVIEW_CAP)) {
     items.push({ key: `dup:${a.uid}:${b.uid}`, kind: 'dup_fuzzy', txs: [view(a), view(b)] })
   }
 
@@ -100,17 +135,8 @@ function applySafeFixes(rows) {
   const fixed = { merged: 0, trimmed: 0, ruleFilled: 0, normalized: 0 }
   const fixedItems = []
 
-  // 2.1 精确重复 → 合并：保留"最权威"的一条（有账单单号 > 账单导入来源 > 最早创建），其余删除（留墓碑同步）
-  const sigMap = new Map()
-  for (const t of rows) {
-    const sig = [t.ts, t.amount, t.direction, t.merchant, t.account, t.source].join('|')
-    if (!sigMap.has(sig)) sigMap.set(sig, [])
-    sigMap.get(sig).push(t)
-  }
-  for (const group of sigMap.values()) {
-    if (group.length < 2) continue
-    const extIds = new Set(group.map((t) => t.ext_id || ''))
-    if (extIds.size > 1 && group.every((t) => t.ext_id)) continue
+  // 2.1 精确重复（含手记双击型）→ 合并：保留"最权威"的一条（有账单单号 > 账单导入来源 > 最早创建），其余删除（留墓碑同步）
+  for (const group of exactDupGroups(rows)) {
     const rank = (t) => (t.ext_id ? 4 : 0) + (t.source === 'csv' ? 2 : 0) - Date.parse(t.created_at || t.ts) / 1e15
     const keep = group.slice().sort((a, b) => rank(b) - rank(a))[0]
     for (const t of group) {
@@ -217,7 +243,8 @@ async function reviewLlm(items) {
 }
 
 // ---- 主入口 ----
-export async function qualityCheck({ month = '', apply = false } = {}) {
+// llm 默认 false：纯程序体检（秒回、零 token）；llm=true 才把剩余异常交给模型复核
+export async function qualityCheck({ month = '', apply = false, llm = false } = {}) {
   const cats = getCategories().expense
   const rows = fetchRows(month)
   let fixed = { merged: 0, trimmed: 0, ruleFilled: 0, normalized: 0 }
@@ -241,10 +268,14 @@ export async function qualityCheck({ month = '', apply = false } = {}) {
   }
   // LLM 复核：只看"需要判断"的异常（疑似重复 + 缺失 + 格式 + 未修复的不一致）；积压类纯信息不进模型
   const reviewable = items.filter((x) => ['dup_fuzzy', 'missing', 'format', 'inconsistent'].includes(x.kind)).slice(0, REVIEW_CAP)
-  let llm = { ok: false, model: '', note: reviewable.length ? '待复核' : '无异常，无需复核', decisions: [] }
-  if (reviewable.length) {
+  let llmOut = { ok: false, model: '', note: '', decisions: [] }
+  if (!llm) {
+    llmOut.note = ''
+  } else if (!reviewable.length) {
+    llmOut.note = '无异常，无需复核'
+  } else {
     const r = await reviewLlm(reviewable)
-    llm = { ok: r.ok, model: r.model, note: r.note, decisions: r.decisions }
+    llmOut = { ok: r.ok, model: r.model, note: r.note, decisions: r.decisions }
     const byKey = new Map(r.decisions.map((d) => [d.key, d]))
     for (const it of reviewable) {
       const d = byKey.get(it.key)
@@ -259,6 +290,6 @@ export async function qualityCheck({ month = '', apply = false } = {}) {
     fixed,
     fixedItems,
     items: items.slice(0, 100).map((it) => ({ key: it.key, kind: it.kind, label: KIND_LABEL[it.kind] || it.kind, detail: it.detail || '', txs: it.txs, verdict: it.verdict || '', advice: it.advice || '' })),
-    llm: { ok: llm.ok, model: llm.model, note: llm.note },
+    llm: { ok: llmOut.ok, model: llmOut.model, note: llmOut.note, enabled: !!llm },
   }
 }
