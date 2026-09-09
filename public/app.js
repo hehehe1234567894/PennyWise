@@ -408,7 +408,9 @@
     } catch (err) { toast('保存失败：' + err.message) }
   })
 
-  // ---------- 采集 ----------
+  // [已停用 v49.2] 文字记账：粘贴 / 解析入账（对应后端 /api/capture）
+  // 恢复方式：取消下面这段注释（capture() 函数在本文件下方同步保留为注释）
+  /*
   $('btn-paste').addEventListener('click', async () => {
     try {
       const t = await navigator.clipboard.readText()
@@ -422,10 +424,13 @@
     if (!text) return toast('先输入或粘贴交易文本')
     capture(text)
   })
+  */
 
   $('btn-manual').addEventListener('click', () => openEditor('manual', null))
 
-  // ---------- 截图采集 ----------
+  // [已停用 v49.2] 图片记账：选截图 / Ctrl+V 粘贴截图 / 拖拽图片（对应后端 /api/capture-image）
+  // 恢复方式：取消下面这段注释（captureImage() 函数在本文件下方同步保留为注释）
+  /*
   $('btn-image').addEventListener('click', () => $('file-image').click())
   $('file-image').addEventListener('change', (e) => {
     const f = e.target.files && e.target.files[0]
@@ -450,7 +455,11 @@
     const f = e.dataTransfer?.files?.[0]
     if (f && f.type.startsWith('image/')) captureImage(f)
   })
+  */
 
+  // [已停用 v49.2] 图片/文字记账的底层函数（fileToBase64 / captureImage / capture）
+  // 恢复方式：整段取消注释，并同步放开后端 /api/capture、/api/capture-image
+  /*
   function fileToBase64(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader()
@@ -535,6 +544,7 @@
       }
     }
   }
+  */
 
   // ---------- 列表渲染（读本地镜像，离线可用） ----------
   let lastListItems = []
@@ -1781,7 +1791,8 @@
       history.replaceState(null, '', location.pathname + location.search)
       setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
     }
-    // 分享式记账回跳：截图/文本已被 Service Worker 收进账本
+    // [已停用 v49.2] 分享式记账回跳：截图/文本已被 Service Worker 收进账本（sw.js 里同步停用）
+    /*
     const shared = location.search.match(/shared=(image|text)/)
     if (shared) {
       history.replaceState(null, '', location.pathname)
@@ -1791,6 +1802,7 @@
         syncNow()
       }, 800)
     }
+    */
     ensureUnlocked()
   }
   init()

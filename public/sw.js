@@ -39,6 +39,10 @@ function saveShared(entry) {
 }
 
 async function handleShare(req) {
+  // [已停用 v49.2] 分享式记账（截图/文本）：当前只走微信/支付宝账单通道，分享进来一律空回跳。
+  // 恢复方式：删掉下面这行 return，并取消下方原逻辑的注释。
+  return Response.redirect('/?shared=0', 303)
+  /*
   try {
     const fd = await req.formData()
     const text = String(fd.get('text') || fd.get('title') || '').trim()
@@ -66,6 +70,7 @@ async function handleShare(req) {
   } catch (e) {
     return Response.redirect('/?shared=0', 303)
   }
+  */
 }
 
 self.addEventListener('install', (e) => {

@@ -244,7 +244,9 @@ app.delete('/api/categories/:name', (req, res) => {
   res.json({ ok: true, data: getCategories() })
 })
 
-// ---- 采集：文本 → LLM 解析 → 待确认（或高置信度自动入账） ----
+// [已停用 v49.2] 文字记账（粘贴交易通知 → LLM 解析）：当前只走微信/支付宝账单通道。
+// 恢复方式：整段取消注释即可（captureTextCore 的 import 未动）。
+/*
 app.post('/api/capture', async (req, res) => {
   const { text, ts, client_id: cid } = req.body || {}
   if (typeof text !== 'string' || !text.trim()) return fail(res, 400, 'bad_request', 'text 不能为空')
@@ -259,6 +261,7 @@ app.post('/api/capture', async (req, res) => {
   const r = await captureTextCore(text, clientId, 'text', autoConfirmAt())
   res.status(201).json({ ok: true, data: r })
 })
+*/
 
 // ---- 账单导入（微信/支付宝/银行 CSV，邮箱自动收取或手动上传） ----
 const liveEvents = new EventEmitter()
@@ -477,8 +480,10 @@ async function checkMonthlyReport() {
   pushEvent('report', '月报已自动发送', `${key} 月度汇总已送达你的邮箱/微信`)
 }
 
-// ---- 采集：支付截图 → 视觉模型解析 → 待确认 ----
-// 支持两种形式：JSON base64（网页端）/ 原始图片字节（移动端等）
+// [已停用 v49.2] 图片记账（支付截图 → 视觉模型解析）：当前只走微信/支付宝账单通道。
+// 恢复方式：整段取消注释即可（captureImageCore / detectImage 的 import 未动）。
+// 注：/api/image/:name 保留——账本里历史记录仍要能显示已存的截图。
+/*
 app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application/json'), limit: '16mb' }), async (req, res) => {
   let buf = null
   let mime = 'image/jpeg'
@@ -507,6 +512,7 @@ app.post('/api/capture-image', express.raw({ type: (req) => !req.is('application
   const { transaction, parse } = await captureImageCore(buf, mime, clientId, 'image', autoConfirmAt())
   res.status(201).json({ ok: true, data: { transaction, parse } })
 })
+*/
 
 // 已保存的截图（随机文件名即访问凭证；配合 token 鉴权场景外的 <img> 使用）
 app.get('/api/image/:name', (req, res) => {

@@ -110,10 +110,12 @@
       <p id="mail-feed-empty" class="empty hidden">还没有处理记录。把账单邮件发到你的 163 邮箱就会自动导入。</p>
     </section>
 
-    <!-- 以下两个板块已停用（隐藏保留，数据流不受影响） -->
+    <!-- [已停用 v49.2] 图片记账 / 文字记账：当前只走微信/支付宝账单邮件通道。
+         板块保留在 DOM 里（不可达，底部导航没有入口），数据流不受影响。
+         恢复方式：底部导航加回入口 + 放开 app.js 采集事件 + 放开后端 /api/capture、/api/capture-image -->
     <section id="tab-capture" class="panel" hidden>
       <h2>记一笔</h2>
-      <p class="hint">粘贴交易通知 / 点「选截图」识别支付截图 / 电脑上可直接 Ctrl+V 粘贴截图</p>
+      <p class="hint">⏸ 图片/文字记账已停用（v49.2），当前只通过微信/支付宝账单邮件自动记账</p>
       <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
       <div class="btn-row">
         <button id="btn-paste" class="btn">粘贴</button>
