@@ -244,7 +244,7 @@ app.delete('/api/categories/:name', (req, res) => {
   res.json({ ok: true, data: getCategories() })
 })
 
-// [已停用 v49.2] 文字记账（粘贴交易通知 → LLM 解析）：当前只走微信/支付宝账单通道。
+// [已停用 v26.9.9] 文字记账（粘贴交易通知 → LLM 解析）：当前只走微信/支付宝账单通道。
 // 恢复方式：整段取消注释即可（captureTextCore 的 import 未动）。
 /*
 app.post('/api/capture', async (req, res) => {
@@ -480,7 +480,7 @@ async function checkMonthlyReport() {
   pushEvent('report', '月报已自动发送', `${key} 月度汇总已送达你的邮箱/微信`)
 }
 
-// [已停用 v49.2] 图片记账（支付截图 → 视觉模型解析）：当前只走微信/支付宝账单通道。
+// [已停用 v26.9.9] 图片记账（支付截图 → 视觉模型解析）：当前只走微信/支付宝账单通道。
 // 恢复方式：整段取消注释即可（captureImageCore / detectImage 的 import 未动）。
 // 注：/api/image/:name 保留——账本里历史记录仍要能显示已存的截图。
 /*

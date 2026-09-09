@@ -17,7 +17,7 @@
   <aside id="sidebar" class="sidebar">
     <div class="side-logo">
       <span class="logo-mark">💰</span>
-      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v49</span></div>
+      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v26.9.9</span></div>
     </div>
     <nav class="side-nav">
       <button class="side-item active" data-tab="list"><span class="side-ico">📄</span><span>流水</span></button>
@@ -32,7 +32,7 @@
   </aside>
 
   <header class="topbar">
-    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v49</span></div>
+    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v26.9.9</span></div>
     <div class="topbar-right">
       <span id="net-chip" class="chip chip-ok hidden">在线</span>
       <button id="btn-mail" class="icon-btn mail-btn" title="邮箱动态">📬<span id="mail-dot" class="mail-dot hidden"></span></button>
@@ -110,12 +110,12 @@
       <p id="mail-feed-empty" class="empty hidden">还没有处理记录。把账单邮件发到你的 163 邮箱就会自动导入。</p>
     </section>
 
-    <!-- [已停用 v49.2] 图片记账 / 文字记账：当前只走微信/支付宝账单邮件通道。
+    <!-- [已停用 v26.9.9] 图片记账 / 文字记账：当前只走微信/支付宝账单邮件通道。
          板块保留在 DOM 里（不可达，底部导航没有入口），数据流不受影响。
          恢复方式：底部导航加回入口 + 放开 app.js 采集事件 + 放开后端 /api/capture、/api/capture-image -->
     <section id="tab-capture" class="panel" hidden>
       <h2>记一笔</h2>
-      <p class="hint">⏸ 图片/文字记账已停用（v49.2），当前只通过微信/支付宝账单邮件自动记账</p>
+      <p class="hint">⏸ 图片/文字记账已停用（v26.9.9），当前只通过微信/支付宝账单邮件自动记账</p>
       <textarea id="capture-text" rows="5" placeholder="微信支付 收款方：全家便利店 ¥18.50"></textarea>
       <div class="btn-row">
         <button id="btn-paste" class="btn">粘贴</button>

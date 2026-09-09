@@ -408,7 +408,7 @@
     } catch (err) { toast('保存失败：' + err.message) }
   })
 
-  // [已停用 v49.2] 文字记账：粘贴 / 解析入账（对应后端 /api/capture）
+  // [已停用 v26.9.9] 文字记账：粘贴 / 解析入账（对应后端 /api/capture）
   // 恢复方式：取消下面这段注释（capture() 函数在本文件下方同步保留为注释）
   /*
   $('btn-paste').addEventListener('click', async () => {
@@ -428,7 +428,7 @@
 
   $('btn-manual').addEventListener('click', () => openEditor('manual', null))
 
-  // [已停用 v49.2] 图片记账：选截图 / Ctrl+V 粘贴截图 / 拖拽图片（对应后端 /api/capture-image）
+  // [已停用 v26.9.9] 图片记账：选截图 / Ctrl+V 粘贴截图 / 拖拽图片（对应后端 /api/capture-image）
   // 恢复方式：取消下面这段注释（captureImage() 函数在本文件下方同步保留为注释）
   /*
   $('btn-image').addEventListener('click', () => $('file-image').click())
@@ -457,7 +457,7 @@
   })
   */
 
-  // [已停用 v49.2] 图片/文字记账的底层函数（fileToBase64 / captureImage / capture）
+  // [已停用 v26.9.9] 图片/文字记账的底层函数（fileToBase64 / captureImage / capture）
   // 恢复方式：整段取消注释，并同步放开后端 /api/capture、/api/capture-image
   /*
   function fileToBase64(file) {
@@ -1791,7 +1791,7 @@
       history.replaceState(null, '', location.pathname + location.search)
       setTimeout(() => toast('✓ 已自动配对，建议点分享 → 添加到主屏幕'), 1200)
     }
-    // [已停用 v49.2] 分享式记账回跳：截图/文本已被 Service Worker 收进账本（sw.js 里同步停用）
+    // [已停用 v26.9.9] 分享式记账回跳：截图/文本已被 Service Worker 收进账本（sw.js 里同步停用）
     /*
     const shared = location.search.match(/shared=(image|text)/)
     if (shared) {
