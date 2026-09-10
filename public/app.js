@@ -754,6 +754,17 @@
   }
   function ruleSummaryOf(kind, r) { return kind === 'ex' ? exRuleSummary(r) : rpRuleSummary(r) }
   function rulesOf(kind) { return kind === 'ex' ? exRules : rpRules }
+  // 折叠区角标：一眼看出有几条规则在生效（收起状态下也不盲）
+  function updateAdvBadge() {
+    const el = $('ex-adv-badge')
+    if (!el) return
+    const ne = exExcludeOn ? exRules.filter((r) => r.merchant).length : 0
+    const nr = rpReplaceOn ? rpRules.filter((r) => r.merchant && r.toMerchant).length : 0
+    const parts = []
+    if (ne) parts.push(`剔除 ${ne}`)
+    if (nr) parts.push(`替换 ${nr}`)
+    el.textContent = parts.length ? parts.join(' · ') + ' 条生效' : ''
+  }
   function renderRules(kind) {
     const cfg = KIND[kind]
     const box = $(cfg.list)
@@ -761,6 +772,7 @@
     const list = rulesOf(kind)
     if (!list.length) {
       box.innerHTML = `<div class="ex-exempty">${cfg.empty}</div>`
+      updateAdvBadge()
       return
     }
     box.innerHTML = list.map((r, i) => `
@@ -814,6 +826,7 @@
         </div>
         <div class="ex-rule-hit" data-hit="${i}"></div>
       </div>`).join('')
+    updateAdvBadge()
   }
   function exRenderRules() { renderRules('ex') }
   function rpRenderRules() { renderRules('rp') }
@@ -1013,6 +1026,8 @@
       r[k] = field.type === 'number' ? (field.value === '' ? '' : Number(field.value)) : field.value
       const sum = card.querySelector('.ex-rule-sum')
       if (sum) sum.textContent = ruleSummaryOf(kind, r)
+      // 商家名/替换目标从空变有值会改变"生效规则数"，角标要跟着走
+      updateAdvBadge()
       exTestRulesDebounced()
     })
     box.addEventListener('change', (e) => {
@@ -1044,6 +1059,7 @@
       const inputs = $('ex-ex-list').querySelectorAll('[data-f="merchant"]')
       const last = inputs[inputs.length - 1]
       if (last) last.focus()
+      updateAdvBadge()
     })
   }
   const rpAddBtn = $('ex-rp-add')
@@ -1054,6 +1070,7 @@
       const inputs = $('ex-rp-list').querySelectorAll('[data-f="merchant"]')
       const last = inputs[inputs.length - 1]
       if (last) last.focus()
+      updateAdvBadge()
     })
   }
   const exSaveBtn = $('ex-ex-save')
@@ -1064,6 +1081,7 @@
   if (exOnBtn) {
     exOnBtn.addEventListener('change', () => {
       exExcludeOn = exOnBtn.checked
+      updateAdvBadge()
       exRefreshStat().catch(() => {})
     })
   }
@@ -1071,6 +1089,7 @@
   if (rpOnBtn) {
     rpOnBtn.addEventListener('change', () => {
       rpReplaceOn = rpOnBtn.checked
+      updateAdvBadge()
       exRefreshStat().catch(() => {})
     })
   }

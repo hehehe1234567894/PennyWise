@@ -837,6 +837,38 @@ main { position: relative; z-index: 1; }
 .btn-ghost { background: transparent; border: 1px solid var(--border2); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
+/* ---- 高级功能折叠区（剔除 / 替换商家）---- */
+.ex-adv {
+  background: var(--card, #fff); border: 1px solid var(--border); border-radius: 14px;
+  margin-bottom: 14px; overflow: hidden;
+}
+.ex-adv-sum {
+  display: flex; align-items: center; gap: 9px; padding: 13px 16px;
+  cursor: pointer; list-style: none; user-select: none; font-size: 14.5px;
+}
+.ex-adv-sum::-webkit-details-marker { display: none; }
+.ex-adv-sum:hover { background: var(--hover, rgba(127,127,127,.05)); }
+.ex-adv-caret {
+  flex: none; width: 0; height: 0; margin-left: 2px;
+  border-left: 5px solid currentColor; border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
+  opacity: .55; transition: transform .18s ease;
+}
+.ex-adv[open] .ex-adv-caret { transform: rotate(90deg); }
+.ex-adv-title { font-weight: 600; flex: none; }
+.ex-adv-badge {
+  flex: none; font-size: 11.5px; padding: 2px 8px; border-radius: 20px;
+  background: var(--accent-soft, rgba(10,132,255,.12)); color: var(--accent, #0A84FF);
+}
+.ex-adv-badge:empty { display: none; }
+.ex-adv-hint { flex: 1; text-align: right; font-size: 12px; color: var(--dim); }
+.ex-adv-body { padding: 4px 14px 14px; }
+.ex-adv-body .ex-card { margin-bottom: 12px; }
+.ex-adv-body .ex-card:last-child { margin-bottom: 0; }
+@media (max-width: 560px) {
+  .ex-adv-hint { display: none; }
+  .ex-adv-title { font-size: 13.5px; }
+}
+
 /* ---- 导出偏好：剔除规则 ---- */
 .ex-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ex-switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); cursor: pointer; flex: none; }

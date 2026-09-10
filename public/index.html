@@ -163,39 +163,50 @@
         </div>
       </div>
 
-      <!-- 导出偏好：剔除 + 替换指定商家的账单 -->
-      <div class="ex-card">
-        <div class="ex-card-head">
-          <h3 class="ex-h3">🚫 导出偏好 · 剔除部分账单</h3>
-          <label class="ex-switch" title="关闭后本次导出不做任何剔除，规则仍保留">
-            <input type="checkbox" id="ex-ex-on" checked><span>启用剔除</span>
-          </label>
-        </div>
-        <p class="hint">规则长期保存，导出时自动生效；<strong>影响导出的结果，不改动原始账本</strong>。一条规则 = 商家 + 可选限定（方向 / 时间 / 金额 / 分类）；限定留空即剔除该商家的全部账单。</p>
-        <div id="ex-ex-list" class="ex-exlist"></div>
-        <p class="ex-exnote" id="ex-exnote"></p>
-        <div class="ex-actions">
-          <button id="ex-ex-add" class="btn btn-sm">＋ 新增剔除规则</button>
-          <button id="ex-ex-save" class="btn btn-sm btn-primary">💾 保存偏好</button>
-        </div>
-      </div>
+      <!-- 高级功能（默认收起）：剔除 + 替换指定商家的账单 -->
+      <details class="ex-adv" id="ex-adv">
+        <summary class="ex-adv-sum">
+          <span class="ex-adv-caret" aria-hidden="true"></span>
+          <span class="ex-adv-title">⚙️ 高级功能 · 剔除 / 替换商家</span>
+          <span class="ex-adv-badge" id="ex-adv-badge"></span>
+          <span class="ex-adv-hint">影响导出结果，不改动原始账本</span>
+        </summary>
+        <div class="ex-adv-body">
 
-      <!-- 导出偏好：把某些商家的账单替换成别的商家（仅影响导出，不改原始账本） -->
-      <div class="ex-card">
-        <div class="ex-card-head">
-          <h3 class="ex-h3">🔁 导出偏好 · 替换商家</h3>
-          <label class="ex-switch" title="关闭后本次导出不做任何替换，规则仍保留">
-            <input type="checkbox" id="ex-rp-on" checked><span>启用替换</span>
-          </label>
+          <div class="ex-card">
+            <div class="ex-card-head">
+              <h3 class="ex-h3">🚫 剔除部分账单</h3>
+              <label class="ex-switch" title="关闭后本次导出不做任何剔除，规则仍保留">
+                <input type="checkbox" id="ex-ex-on" checked><span>启用剔除</span>
+              </label>
+            </div>
+            <p class="hint">规则长期保存，导出时自动生效。一条规则 = 商家 + 可选限定（方向 / 时间 / 金额 / 分类）；限定留空即剔除该商家的全部账单。</p>
+            <div id="ex-ex-list" class="ex-exlist"></div>
+            <p class="ex-exnote" id="ex-exnote"></p>
+            <div class="ex-actions">
+              <button id="ex-ex-add" class="btn btn-sm">＋ 新增剔除规则</button>
+              <button id="ex-ex-save" class="btn btn-sm btn-primary">💾 保存偏好</button>
+            </div>
+          </div>
+
+          <div class="ex-card">
+            <div class="ex-card-head">
+              <h3 class="ex-h3">🔁 替换商家</h3>
+              <label class="ex-switch" title="关闭后本次导出不做任何替换，规则仍保留">
+                <input type="checkbox" id="ex-rp-on" checked><span>启用替换</span>
+              </label>
+            </div>
+            <p class="hint">把指定商家的账单在<strong>导出结果里</strong>记成别的商家（可同时改分类）。匹配条件与剔除规则一致；先替换、后剔除。</p>
+            <div id="ex-rp-list" class="ex-exlist"></div>
+            <p class="ex-exnote" id="ex-rpnote"></p>
+            <div class="ex-actions">
+              <button id="ex-rp-add" class="btn btn-sm">＋ 新增替换规则</button>
+              <button id="ex-rp-save" class="btn btn-sm btn-primary">💾 保存偏好</button>
+            </div>
+          </div>
+
         </div>
-        <p class="hint">把指定商家的账单在<strong>导出结果里</strong>记成别的商家（可同时改分类），原始账本不受影响。匹配条件与剔除规则一致；先替换、后剔除。</p>
-        <div id="ex-rp-list" class="ex-exlist"></div>
-        <p class="ex-exnote" id="ex-rpnote"></p>
-        <div class="ex-actions">
-          <button id="ex-rp-add" class="btn btn-sm">＋ 新增替换规则</button>
-          <button id="ex-rp-save" class="btn btn-sm btn-primary">💾 保存偏好</button>
-        </div>
-      </div>
+      </details>
 
       <div class="ex-card">
         <h3 class="ex-h3">📑 账单分析 PDF</h3>
