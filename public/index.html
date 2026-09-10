@@ -17,13 +17,14 @@
   <aside id="sidebar" class="sidebar">
     <div class="side-logo">
       <span class="logo-mark">💰</span>
-      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v26.9.9</span></div>
+      <div class="side-brand"><h1>PennyWise</h1><span class="ver-chip">v26.9.10</span></div>
     </div>
     <nav class="side-nav">
       <button class="side-item active" data-tab="list"><span class="side-ico">📄</span><span>流水</span></button>
       <button class="side-item" data-tab="stats"><span class="side-ico">📊</span><span>统计</span></button>
       <button class="side-item" data-tab="fin"><span class="side-ico">🐷</span><span>理财</span></button>
       <button class="side-item" data-tab="mail"><span class="side-ico">📬</span><span>邮箱账单</span><span class="mail-dot hidden"></span></button>
+      <button class="side-item" data-tab="export"><span class="side-ico">⬇</span><span>导出</span></button>
     </nav>
     <div class="side-foot">
       <button class="side-item" id="side-settings"><span class="side-ico">⚙️</span><span>设置</span></button>
@@ -32,7 +33,7 @@
   </aside>
 
   <header class="topbar">
-    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v26.9.9</span></div>
+    <div class="logo"><span class="logo-mark">💰</span><h1>PennyWise</h1><span class="ver-chip">v26.9.10</span></div>
     <div class="topbar-right">
       <span id="net-chip" class="chip chip-ok hidden">在线</span>
       <button id="btn-mail" class="icon-btn mail-btn" title="邮箱动态">📬<span id="mail-dot" class="mail-dot hidden"></span></button>
@@ -51,6 +52,7 @@
         <div class="panel-tools">
           <input id="list-month" type="month">
           <input id="list-q" type="search" placeholder="搜索商户 / 备注">
+          <button id="list-export" class="btn btn-ghost btn-sm" title="导出账单 / 分析报告">⬇ 导出</button>
         </div>
       </div>
       <div id="list-summary" class="sum-row"></div>
@@ -110,6 +112,72 @@
       <p id="mail-feed-empty" class="empty hidden">还没有处理记录。把账单邮件发到你的 163 邮箱就会自动导入。</p>
     </section>
 
+    <!-- 导出：总账单 / 微信 / 支付宝 / 按分类 + 精美分析 PDF -->
+    <section id="tab-export" class="panel" hidden>
+      <div class="panel-head">
+        <h2 class="panel-title">⬇ 导出</h2>
+      </div>
+
+      <div class="ex-card">
+        <div class="ex-row">
+          <label class="ex-label">时间范围</label>
+          <div class="ex-seg" id="ex-range">
+            <button class="seg-btn active" data-range="all">全部</button>
+            <button class="seg-btn" data-range="month">按月份</button>
+            <button class="seg-btn" data-range="custom">自定义</button>
+          </div>
+        </div>
+        <div class="ex-row ex-sub hidden" id="ex-month-row">
+          <label class="ex-label"></label>
+          <input id="ex-month" type="month">
+        </div>
+        <div class="ex-row ex-sub hidden" id="ex-daterow">
+          <label class="ex-label"></label>
+          <div class="ex-dates">
+            <input id="ex-from" type="date"><span class="ex-tilde">至</span><input id="ex-to" type="date">
+          </div>
+        </div>
+
+        <div class="ex-row">
+          <label class="ex-label">账单类型</label>
+          <div class="ex-seg" id="ex-channel">
+            <button class="seg-btn active" data-channel="all">全部</button>
+            <button class="seg-btn" data-channel="wechat">微信</button>
+            <button class="seg-btn" data-channel="alipay">支付宝</button>
+            <button class="seg-btn" data-channel="bank">银行</button>
+          </div>
+        </div>
+
+        <div class="ex-row">
+          <label class="ex-label">消费分类</label>
+          <select id="ex-category">
+            <option value="">全部分类</option>
+          </select>
+        </div>
+
+        <div class="ex-stat" id="ex-stat">正在统计…</div>
+
+        <div class="ex-actions">
+          <button id="ex-xlsx" class="btn btn-primary">📊 导出 Excel</button>
+          <button id="ex-csv" class="btn">📄 导出 CSV</button>
+        </div>
+      </div>
+
+      <div class="ex-card">
+        <h3 class="ex-h3">📑 账单分析 PDF</h3>
+        <p class="hint">生成一份图文并茂的分析报告（A4，可打印/存档）。下面选你想放进去的内容：</p>
+        <label class="ex-check"><input type="checkbox" id="ex-b-charts" checked><span><b>基础图表</b> · 收支概览、分类环形图、月度趋势、最大支出榜</span></label>
+        <label class="ex-check"><input type="checkbox" id="ex-b-ai"><span><b>AI 消费分析</b> · 让模型写一段本月消费点评（需等约 20–40 秒）</span></label>
+        <label class="ex-check"><input type="checkbox" id="ex-b-budget" checked><span><b>预算执行</b> · 各分类预算进度与超支提醒</span></label>
+        <label class="ex-check"><input type="checkbox" id="ex-b-detail"><span><b>逐笔明细</b> · 报告末尾附完整交易明细表</span></label>
+        <div class="ex-actions">
+          <button id="ex-preview" class="btn">👁 先看网页版</button>
+          <button id="ex-pdf" class="btn btn-primary">📕 生成 PDF</button>
+        </div>
+        <p class="hint" id="ex-pdf-hint"></p>
+      </div>
+    </section>
+
     <!-- [已停用 v26.9.9] 图片记账 / 文字记账：当前只走微信/支付宝账单邮件通道。
          板块保留在 DOM 里（不可达，底部导航没有入口），数据流不受影响。
          恢复方式：底部导航加回入口 + 放开 app.js 采集事件 + 放开后端 /api/capture、/api/capture-image -->
@@ -141,6 +209,7 @@
     <button class="tab" data-tab="stats"><span class="tab-ico">📊</span><span>统计</span></button>
     <button class="tab" data-tab="fin"><span class="tab-ico">🐷</span><span>理财</span></button>
     <button class="tab" data-tab="mail"><span class="tab-ico">📬</span><span>邮箱</span></button>
+    <button class="tab" data-tab="export"><span class="tab-ico">⬇</span><span>导出</span></button>
   </nav>
 
   <div id="modal" class="modal hidden">

@@ -210,12 +210,12 @@
   }
   mqDesktop.addEventListener('change', applyLayout)
 
-  const TAB_RENDER = { list: renderList, stats: renderStats, mail: renderMail, fin: renderFin }
+  const TAB_RENDER = { list: renderList, stats: renderStats, mail: renderMail, fin: renderFin, export: renderExport }
   function switchTab(name) {
     document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     document.querySelectorAll('.side-item[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
     if (name === 'mail') markMailRead() // 任何入口（侧栏/顶栏）打开邮箱页都算已读
-    ;['list', 'stats', 'mail', 'fin'].forEach((t) => {
+    ;['list', 'stats', 'mail', 'fin', 'export'].forEach((t) => {
       const el = $(`tab-${t}`)
       el.hidden = t !== name
       el.classList.remove('tab-enter')
@@ -676,6 +676,142 @@
       <span>结余 <b>${fmtMoney(s.balance)}</b></span>`
     if (scroller && keepScroll) scroller.scrollTop = st
   }
+
+  // ---------- 导出（账单 Excel/CSV + 精美分析 PDF） ----------
+  const exState = { range: 'all', channel: 'all' }
+  const EX_CATS = () => {
+    const sel = $('ex-category')
+    const cur = sel.value
+    const exp = (categories && categories.expense) || []
+    sel.innerHTML = '<option value="">全部分类</option>' + exp.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')
+    if (cur) sel.value = cur
+  }
+  // 组装当前筛选为 query 串（供统计/下载共用）
+  function exQuery(extra = {}) {
+    const p = new URLSearchParams()
+    if (exState.range === 'month') { const m = $('ex-month').value; if (m) p.set('month', m) }
+    else if (exState.range === 'custom') {
+      const f = $('ex-from').value, t = $('ex-to').value
+      if (f) p.set('from', f)
+      if (t) p.set('to', t)
+    }
+    if (exState.channel && exState.channel !== 'all') p.set('channel', exState.channel)
+    const cat = $('ex-category').value
+    if (cat) p.set('category', cat)
+    for (const [k, v] of Object.entries(extra)) p.set(k, v)
+    return p.toString()
+  }
+  // 带令牌的下载直链（浏览器原生下载，大文件也不占内存）
+  function exDownload(path, qs) {
+    const url = `${apiBase}${path}?${qs}&t=${encodeURIComponent(token)}`
+    const a = document.createElement('a')
+    a.href = url
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+  async function renderExport() {
+    EX_CATS()
+    if (!$('ex-month').value) $('ex-month').value = localMonth()
+    if (!$('ex-from').value) {
+      const d = new Date()
+      $('ex-to').value = d.toISOString().slice(0, 10)
+      d.setDate(1)
+      $('ex-from').value = d.toISOString().slice(0, 10)
+    }
+    await exRefreshStat()
+    // PDF 能力提示（没装 Edge/Chrome 时提前告知，不等到点按钮才报错）
+    try {
+      const d = await api('/api/export/preview?' + exQuery())
+      const hint = $('ex-pdf-hint')
+      if (hint) hint.textContent = d.hasPdf ? '' : '⚠ 未检测到 Edge/Chrome，PDF 生成不可用；可先「看网页版」再用浏览器打印为 PDF。'
+    } catch { /* 统计失败已单独提示 */ }
+  }
+  async function exRefreshStat() {
+    const box = $('ex-stat')
+    box.textContent = '正在统计…'
+    try {
+      const d = await api('/api/export/preview?' + exQuery())
+      const r = (n) => '¥' + Math.abs(Number(n) || 0).toFixed(2)
+      box.innerHTML = d.count
+        ? `${esc(d.rangeLabel)} · <b>${d.count}</b> 笔 支出 <b class="ex-big expense">${r(d.expense)}</b> 收入 <b class="income">${r(d.income)}</b> 结余 <b>${(d.net >= 0 ? '+' : '-') + r(d.net)}</b>`
+        : `${esc(d.rangeLabel)} · 该条件下没有记录`
+    } catch (e) {
+      box.textContent = '统计失败：' + (e.message || '网络异常')
+    }
+  }
+  // 范围/渠道分段控件
+  function bindSeg(container, key, after) {
+    container.addEventListener('click', (e) => {
+      const b = e.target.closest('.seg-btn')
+      if (!b) return
+      container.querySelectorAll('.seg-btn').forEach((x) => x.classList.toggle('active', x === b))
+      exState[key] = b.dataset[key === 'range' ? 'range' : 'channel']
+      if (after) after()
+      exRefreshStat().catch(() => {})
+    })
+  }
+  bindSeg($('ex-range'), 'range', () => {
+    $('ex-month-row').classList.toggle('hidden', exState.range !== 'month')
+    $('ex-daterow').classList.toggle('hidden', exState.range !== 'custom')
+  })
+  bindSeg($('ex-channel'), 'channel')
+  $('ex-month').addEventListener('change', () => exRefreshStat().catch(() => {}))
+  $('ex-from').addEventListener('change', () => exRefreshStat().catch(() => {}))
+  $('ex-to').addEventListener('change', () => exRefreshStat().catch(() => {}))
+  $('ex-category').addEventListener('change', () => exRefreshStat().catch(() => {}))
+
+  $('ex-xlsx').addEventListener('click', () => exDownload('/api/export/bills', exQuery({ format: 'xlsx' })))
+  $('ex-csv').addEventListener('click', () => exDownload('/api/export/bills', exQuery({ format: 'csv' })))
+  $('ex-preview').addEventListener('click', () => {
+    const qs = exQuery({
+      charts: $('ex-b-charts').checked ? '1' : '0',
+      ai: $('ex-b-ai').checked ? '1' : '0',
+      budget: $('ex-b-budget').checked ? '1' : '0',
+      detail: $('ex-b-detail').checked ? '1' : '0',
+    })
+    window.open(`${apiBase}/api/export/report.html?${qs}&t=${encodeURIComponent(token)}`, '_blank', 'noopener')
+  })
+  $('ex-pdf').addEventListener('click', async () => {
+    const btn = $('ex-pdf')
+    const withAi = $('ex-b-ai').checked
+    const old = btn.textContent
+    btn.disabled = true
+    btn.textContent = withAi ? '生成中…（含 AI 分析，约 30–60 秒）' : '生成中…（约 10 秒）'
+    try {
+      const qs = exQuery({
+        charts: $('ex-b-charts').checked ? '1' : '0',
+        ai: withAi ? '1' : '0',
+        budget: $('ex-b-budget').checked ? '1' : '0',
+        detail: $('ex-b-detail').checked ? '1' : '0',
+      })
+      const url = `${apiBase}/api/export/report.pdf?${qs}&t=${encodeURIComponent(token)}`
+      const res = await fetch(url)
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || `HTTP ${res.status}`)
+      }
+      const blob = await res.blob()
+      const cd = res.headers.get('Content-Disposition') || ''
+      const m = /filename\*=UTF-8''([^;]+)/.exec(cd)
+      const name = m ? decodeURIComponent(m[1]) : 'PennyWise分析报告.pdf'
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+      toast('✓ 分析报告已生成')
+    } catch (e) {
+      toast('生成失败：' + (e.message || '网络异常'))
+    } finally {
+      btn.disabled = false
+      btn.textContent = old
+    }
+  })
+  $('list-export').addEventListener('click', () => switchTab('export'))
 
   $('list-items').addEventListener('click', (e) => {
     const card = e.target.closest('.row-card')

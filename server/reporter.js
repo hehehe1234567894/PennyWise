@@ -1,6 +1,6 @@
 import { db } from './db.js'
 import { env } from './env.js'
-import { llmConfig } from './llm.js'
+import { llmChain } from './llm.js'
 import { analyzeBillForAlternatives } from './recommend.js'
 // nodemailer 改为 sendEmail 内动态加载：只有真发信才需要，冷启动不再背着它
 
@@ -88,8 +88,8 @@ export function billImportStale() {
 
 // LLM 撰写月报分析（数据 → 洞察；模型不可用时返回空，回退模板报告）
 export async function generateReportNarrative(s) {
-  const cfg = llmConfig()
-  if (!cfg.enabled) return ''
+  const chain = llmChain()
+  if (!chain.length) return ''
   const data = JSON.stringify({
     月: s.month, 收入: s.income, 支出: s.expense, 退款: s.refund, 结余: s.balance, 笔数: s.count,
     支出分类: (s.byCategory || []).slice(0, 6).map((c) => `${c.name} ${c.total}(${c.n}笔)`),
@@ -99,21 +99,25 @@ export async function generateReportNarrative(s) {
     预算执行: (s.budgets || []).map((b) => `${b.category} ${b.spent}/${b.limit}${b.spent > b.limit ? '超支' : ''}`),
   })
   const sys = '你是个人财务分析助手。根据给出的月度数据写一段 120-200 字的简体中文分析：①本月亮点与问题；②最值得关注的一两处（最大支出、异常分类、环比变化）；③一条切实可行的建议。语气亲切专业，不重复罗列全部数据。'
-  try {
-    const res = await fetch(`${cfg.base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: 'system', content: sys }, { role: 'user', content: data }],
-        temperature: 0.3,
-      }),
-      signal: AbortSignal.timeout(45000),
-    })
-    if (!res.ok) return ''
-    const j = await res.json()
-    return String(j?.choices?.[0]?.message?.content || '').trim().slice(0, 600)
-  } catch { return '' }
+  for (const p of chain) {
+    try {
+      const res = await fetch(`${p.base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key}` },
+        body: JSON.stringify({
+          model: p.model,
+          messages: [{ role: 'system', content: sys }, { role: 'user', content: data }],
+          temperature: 0.3,
+        }),
+        signal: AbortSignal.timeout(45000),
+      })
+      if (!res.ok) continue
+      const j = await res.json()
+      const txt = String(j?.choices?.[0]?.message?.content || '').trim().slice(0, 600)
+      if (txt) return txt
+    } catch { /* 换下一个模型 */ }
+  }
+  return ''
 }
 
 const BILL_REMINDER = '微信/支付宝账单已超过 35 天未导入。支付宝可在 App 里开启"每月自动发送账单到邮箱"（设置一次永久自动）；微信账单请每月在 微信 → 我 → 服务 → 钱包 → 账单 → 下载账单 手动发送到邮箱（发送后自动入库，无需其他操作）。'

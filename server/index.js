@@ -13,6 +13,7 @@ import { analyzeBillForAlternatives } from './recommend.js'
 import { auditMonth, buildAuditCsv } from './audit.js'
 import { classifyPreview, classifyPending } from './classify.js'
 import { qualityCheck } from './quality.js'
+import { queryRows, buildCsv, buildXlsx, summarize, buildExportHtml, htmlToPdf, monthlyExpenseTrend, budgetExecution, channelLabel, findBrowser } from './export.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 import { pushEvent, recentEvents, onEvent } from './notify.js'
@@ -113,7 +114,7 @@ app.use('/api', (req, res, next) => {
 })
 
 // ---- 鉴权：/api 下公开端点除外，其余一律要求 X-Auth-Token（本机/远程一视同仁，无验证不可进入） ----
-const PUBLIC_API = ['/qr', '/events', '/health'] // /health 公开：桌面启动器/看门狗用它做无凭据探活
+const PUBLIC_API = ['/qr', '/events', '/health', '/connect-info'] // /health 公开：桌面启动器/看门狗用它做无凭据探活；/connect-info 供锁定屏与配对页无凭据读取连接方式（内容本就是给用户看的二维码/地址）
 function tokenOk(a, b) {
   const ba = Buffer.from(String(a))
   const bb = Buffer.from(String(b))
@@ -124,6 +125,8 @@ app.use('/api', (req, res, next) => {
   if (!AUTH_TOKEN) return next()
   if (PUBLIC_API.includes(req.path)) return next()
   if (req.get('x-auth-token') && tokenOk(req.get('x-auth-token'), AUTH_TOKEN)) return next()
+  // 下载类接口（导出 Excel/CSV/PDF）走浏览器原生下载，无法自定义 header，故同时接受 query 令牌
+  if (req.query && typeof req.query.t === 'string' && req.query.t && tokenOk(req.query.t, AUTH_TOKEN)) return next()
   return res.status(401).json({ ok: false, code: 'auth', error: '访问令牌无效，请验证后再进入' })
 })
 
@@ -811,6 +814,141 @@ app.post('/api/quality', async (req, res) => {
     const data = await qualityCheck({ month: optMonth(b.month), apply: b.apply === true, llm: b.llm === true })
     res.json({ ok: true, data })
   } catch (e) { fail(res, 500, 'quality_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// ---- 账单导出：总账单 / 微信 / 支付宝 / 按分类 + 精美分析 PDF ----
+// 统一筛选参数：month=YYYY-MM 或 from/to=YYYY-MM-DD；channel=all|wechat|alipay|bank|cash|other；category=分类名
+const optDate = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '')
+function exportFilter(q = {}) {
+  const month = optMonth(q.month)
+  // 有月份就用月份；否则用自定义区间
+  return {
+    month,
+    from: month ? '' : optDate(q.from),
+    to: month ? '' : optDate(q.to),
+    channel: typeof q.channel === 'string' && q.channel ? q.channel : 'all',
+    category: typeof q.category === 'string' ? q.category.trim() : '',
+  }
+}
+function rangeLabelOf(f) {
+  if (f.month) return f.month.replace('-', '年') + '月'
+  if (f.from || f.to) return `${f.from || '最早'} ~ ${f.to || '今天'}`
+  return '全部时间'
+}
+// 下载用的文件名（ASCII 安全 + 中文名双轨，浏览器优先取 filename*）
+function attachName(res, base, ext) {
+  const ascii = base.replace(/[^\w.-]/g, '_')
+  res.set('Content-Disposition', `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${encodeURIComponent(base + '.' + ext)}`)
+}
+
+// 导出预览：给前端显示"将导出多少笔、合计多少"
+app.get('/api/export/preview', (req, res) => {
+  try {
+    const f = exportFilter(req.query)
+    const rows = queryRows(f)
+    res.json({ ok: true, data: { ...summarize(rows, { rangeLabel: rangeLabelOf(f) }), rangeLabel: rangeLabelOf(f), hasPdf: Boolean(findBrowser()) } })
+  } catch (e) { fail(res, 500, 'export_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// 账单下载：format=xlsx|csv
+app.get('/api/export/bills', async (req, res) => {
+  try {
+    const f = exportFilter(req.query)
+    const rows = queryRows(f)
+    if (!rows.length) return fail(res, 404, 'empty', '该筛选条件下没有记录')
+    const fmt = req.query.format === 'csv' ? 'csv' : 'xlsx'
+    const base = `PennyWise账单_${rangeLabelOf(f)}_${f.channel === 'all' ? '全部渠道' : channelLabel(f.channel)}${f.category ? '_' + f.category : ''}`
+    res.set('Cache-Control', 'no-store')
+    if (fmt === 'csv') {
+      res.set('Content-Type', 'text/csv; charset=utf-8')
+      attachName(res, base, 'csv')
+      return res.send('\uFEFF' + buildCsv(rows))
+    }
+    const buf = await buildXlsx(rows, { rangeLabel: rangeLabelOf(f), channelLabel: f.channel === 'all' ? '全部' : channelLabel(f.channel), category: f.category })
+    res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    attachName(res, base, 'xlsx')
+    res.send(buf)
+  } catch (e) { fail(res, 500, 'export_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// 导出 HTML 预览（浏览器里直接看，也是 PDF 的渲染源）
+app.get('/api/export/report.html', async (req, res) => {
+  try {
+    const { html } = await buildExportReport(req.query)
+    res.set('Content-Type', 'text/html; charset=utf-8').set('Cache-Control', 'no-store').send(html)
+  } catch (e) { fail(res, 500, 'export_error', String(e?.message || e).slice(0, 200)) }
+})
+
+// 生成分析报告（含可选 AI 分析）：blocks=charts,ai,budget,detail
+async function buildExportReport(q = {}) {
+  const f = exportFilter(q)
+  const rows = queryRows(f)
+  if (!rows.length) { const e = new Error('该筛选条件下没有记录'); e.code = 'empty'; throw e }
+  const on = (k) => q[k] === undefined ? true : (q[k] === '1' || q[k] === 'true')
+  const blocks = { charts: on('charts'), ai: on('ai'), budget: on('budget'), detail: on('detail') }
+  const rangeLabel = rangeLabelOf(f)
+  const meta = { rangeLabel, channelLabel: f.channel === 'all' ? '全部' : channelLabel(f.channel), category: f.category || '全部' }
+
+  let narrative = ''
+  let alts = []
+  // AI 文字分析：复用月报的叙述生成（仅在勾选时调用；60 秒超时，失败不影响导出）
+  if (blocks.ai) {
+    try {
+      const s = summarize(rows, meta)
+      // 按分类聚合（generateReportNarrative 需要 byCategory）
+      const catMap = new Map()
+      for (const r of rows) {
+        if (r.direction !== 'expense') continue
+        const k = r.category || '未分类'
+        const o = catMap.get(k) || { name: k, total: 0, n: 0 }
+        o.total += Math.abs(Number(r.amount) || 0); o.n += 1
+        catMap.set(k, o)
+      }
+      const exp = rows.filter((r) => r.direction === 'expense')
+      const sFull = {
+        ...s,
+        month: f.month || rangeLabel.replace(/[^\d-]/g, '') || '自定义区间',
+        balance: s.net,
+        byCategory: [...catMap.values()].sort((a, b) => b.total - a.total),
+        topExpenses: [...exp].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 5),
+        incomes: rows.filter((r) => r.direction === 'income').slice(0, 5),
+        budgets: f.month ? budgetExecution(f.month) : [],
+        prevExpense: 0, diffPct: null, pendingCount: 0,
+      }
+      narrative = await Promise.race([
+        generateReportNarrative(sFull),
+        new Promise((r) => setTimeout(() => r(''), 60000)),
+      ])
+    } catch (e) { narrative = '' }
+  }
+  // 省钱/升级建议：复用 recommend 模块（内部会联网比价，较慢，仅在显式勾选且指定月份时调用）
+  if (blocks.budget && f.month && (q.suggest === '1' || q.suggest === 'true')) {
+    try {
+      alts = await Promise.race([
+        analyzeBillForAlternatives(f.month).then((r) => r || []),
+        new Promise((r) => setTimeout(() => r([]), 60000)), // 最多等 60 秒，超时则不附建议（不拖垮导出）
+      ])
+    } catch { alts = [] }
+  }
+  const budgets = blocks.budget && f.month ? budgetExecution(f.month) : []
+  const trend = monthlyExpenseTrend(f.from, f.to, f.channel, f.category)
+  const html = buildExportHtml({ rows, meta, blocks, narrative, alts, budgets, trend })
+  const base = `PennyWise分析报告_${rangeLabel}`
+  return { html, base, rows }
+}
+
+// 精美分析 PDF 下载
+app.get('/api/export/report.pdf', async (req, res) => {
+  try {
+    const { html, base } = await buildExportReport(req.query)
+    const pdf = await htmlToPdf(html)
+    res.set('Content-Type', 'application/pdf').set('Cache-Control', 'no-store')
+    attachName(res, base, 'pdf')
+    res.send(pdf)
+  } catch (e) {
+    if (e?.code === 'empty') return fail(res, 404, 'empty', String(e.message))
+    fail(res, 500, 'export_error', String(e?.message || e).slice(0, 200))
+  }
 })
 
 // ---- 商家维度月度汇总（钱花在哪个商家；含上月环比） ----

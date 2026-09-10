@@ -1,7 +1,7 @@
 {
   "name": "pennywise",
-  "version": "26.9.7",
-  "description": "零手动记账：截图/文本 → LLM 解析 → 本地 SQLite 账本（Windows 自托管 + 手机 PWA）",
+  "version": "26.9.10",
+  "description": "零手动记账：微信/支付宝账单邮件自动导入 → 本地 SQLite 账本（Windows 自托管 + 手机 PWA）",
   "private": true,
   "type": "module",
   "engines": {

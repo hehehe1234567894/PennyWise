@@ -796,3 +796,52 @@ main { position: relative; z-index: 1; }
 .day-tip-name { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
 .day-tip-row b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .day-tip-hint { margin-top: 6px; font-size: 10px; color: var(--dim); opacity: .7; }
+
+/* ---------- 导出面板（v26.9.10） ---------- */
+.ex-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; margin-bottom: 14px;
+}
+.ex-shell { padding: 4px 2px 24px; }
+.ex-row { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; }
+.ex-row:last-of-type { margin-bottom: 0; }
+.ex-label { width: 68px; flex: none; font-size: 13px; color: var(--dim); font-weight: 500; }
+.ex-sub { margin-top: -3px; }
+.ex-dates { display: flex; align-items: center; gap: 8px; flex: 1; }
+.ex-dates input { flex: 1; min-width: 0; }
+.ex-tilde { color: var(--dim); font-size: 12px; flex: none; }
+.ex-seg { display: flex; gap: 3px; background: var(--card2); border-radius: 11px; padding: 3px; flex: 1; }
+.ex-cat { flex: 1; }
+.ex-card input[type="month"], .ex-card input[type="date"], .ex-card select {
+  background: var(--card2); border: 1px solid var(--input-border); border-radius: 10px;
+  padding: 8px 11px; font-size: 13.5px; font-family: inherit; color: var(--text); flex: 1; min-width: 0;
+}
+.ex-card input:focus, .ex-card select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ex-stat {
+  margin: 14px 0 4px; padding: 11px 13px; border-radius: 12px;
+  background: var(--callout-bg); color: var(--callout-fg); font-size: 13.5px; line-height: 1.6;
+}
+.ex-stat b { font-variant-numeric: tabular-nums; }
+.ex-stat .ex-big { font-size: 17px; font-weight: 700; }
+.ex-actions { display: flex; gap: 10px; margin-top: 14px; }
+.ex-h3 { margin: 0 0 6px; font-size: 15px; }
+.ex-check {
+  display: flex; align-items: flex-start; gap: 9px; padding: 9px 2px;
+  font-size: 13.5px; line-height: 1.5; cursor: pointer; border-bottom: 1px solid var(--border);
+}
+.ex-check:last-of-type { border-bottom: none; }
+.ex-check input { width: auto; flex: none; margin-top: 3px; accent-color: var(--accent-fill); }
+.ex-check span { color: var(--dim); }
+.ex-check b { color: var(--text); font-weight: 600; }
+.btn-sm { flex: none; min-width: 0; padding: 7px 12px; font-size: 13px; }
+.btn-ghost { background: transparent; border: 1px solid var(--border2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 560px) {
+  .ex-row { flex-wrap: wrap; }
+  .ex-label { width: 100%; }
+}
+
+/* 移动端：底部导航为 fixed，给导出面板留出安全滚动空间（其余面板内容较短未暴露该问题） */
+@media (max-width: 759px) {
+  #tab-export { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
