@@ -163,6 +163,23 @@
         </div>
       </div>
 
+      <!-- 导出偏好：剔除指定商家的指定部分账单 -->
+      <div class="ex-card">
+        <div class="ex-card-head">
+          <h3 class="ex-h3">🚫 导出偏好 · 剔除部分账单</h3>
+          <label class="ex-switch" title="关闭后本次导出不做任何剔除，规则仍保留">
+            <input type="checkbox" id="ex-ex-on" checked><span>启用剔除</span>
+          </label>
+        </div>
+        <p class="hint">规则长期保存，导出时自动生效。一条规则 = 商家 + 可选限定（方向 / 时间 / 金额 / 分类）；限定留空即剔除该商家的全部账单。</p>
+        <div id="ex-ex-list" class="ex-exlist"></div>
+        <p class="ex-exnote" id="ex-exnote"></p>
+        <div class="ex-actions">
+          <button id="ex-ex-add" class="btn btn-sm">＋ 新增规则</button>
+          <button id="ex-ex-save" class="btn btn-sm btn-primary">💾 保存偏好</button>
+        </div>
+      </div>
+
       <div class="ex-card">
         <h3 class="ex-h3">📑 账单分析 PDF</h3>
         <p class="hint">生成一份图文并茂的分析报告（A4，可打印/存档）。下面选你想放进去的内容：</p>

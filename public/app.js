@@ -679,6 +679,17 @@
 
   // ---------- 导出（账单 Excel/CSV + 精美分析 PDF） ----------
   const exState = { range: 'all', channel: 'all' }
+  // 排除规则（导出偏好）：长期保存在服务端 meta 表，导出时自动应用
+  let exRules = []
+  let exExcludeOn = true
+  let exMerchants = []      // 商家候选（用于 datalist 补全）
+  const EX_DIRECTIONS = [
+    { v: '', label: '不限方向' },
+    { v: 'expense', label: '支出' },
+    { v: 'income', label: '收入' },
+    { v: 'refund', label: '退款' },
+    { v: 'transfer', label: '转账' },
+  ]
   const EX_CATS = () => {
     const sel = $('ex-category')
     const cur = sel.value
@@ -698,8 +709,159 @@
     if (exState.channel && exState.channel !== 'all') p.set('channel', exState.channel)
     const cat = $('ex-category').value
     if (cat) p.set('category', cat)
+    // 未保存的临时改动也要立刻生效：把当前规则集直接带给服务端
+    if (!exExcludeOn) p.set('noexclude', '1')
+    else if (exRules.length) p.set('rules', JSON.stringify(exRules))
     for (const [k, v] of Object.entries(extra)) p.set(k, v)
     return p.toString()
+  }
+
+  // ---- 排除规则的 UI 渲染与交互 ----
+  function exRuleSummary(r) {
+    const parts = []
+    if (r.direction) parts.push((EX_DIRECTIONS.find((d) => d.v === r.direction) || {}).label || r.direction)
+    if (r.category) parts.push(r.category)
+    const hasMin = r.min !== '' && r.min !== null && r.min !== undefined
+    const hasMax = r.max !== '' && r.max !== null && r.max !== undefined
+    if (hasMin && hasMax) parts.push(`¥${r.min}~¥${r.max}`)
+    else if (hasMin) parts.push(`≥¥${r.min}`)
+    else if (hasMax) parts.push(`≤¥${r.max}`)
+    if (r.from || r.to) parts.push(`${r.from || '最早'}~${r.to || '今天'}`)
+    return parts.length ? '仅剔除：' + parts.join(' · ') : '剔除该商家全部账单'
+  }
+  function exRenderRules() {
+    const box = $('ex-ex-list')
+    if (!box) return
+    if (!exRules.length) {
+      box.innerHTML = '<div class="ex-exempty">还没有规则。点「＋ 新增规则」开始，例如剔除「某某商家」里金额 ≥100 的支出。</div>'
+      return
+    }
+    box.innerHTML = exRules.map((r, i) => `
+      <div class="ex-rule" data-i="${i}">
+        <div class="ex-rule-head">
+          <span class="ex-rule-idx">${i + 1}</span>
+          <span class="ex-rule-sum">${esc(exRuleSummary(r))}</span>
+          <span class="ex-rule-act">
+            <button class="ex-icon-btn" data-act="up" title="上移" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button class="ex-icon-btn" data-act="del" title="删除">✕</button>
+          </span>
+        </div>
+        <div class="ex-rule-grid">
+          <div class="ex-fld ex-fld-wide">
+            <label>商家（包含匹配）*</label>
+            <input list="ex-merchant-list" data-f="merchant" value="${esc(r.merchant || '')}" placeholder="如：杭州深度求索">
+          </div>
+          <div class="ex-fld">
+            <label>方向</label>
+            <select data-f="direction">${EX_DIRECTIONS.map((d) => `<option value="${d.v}" ${r.direction === d.v ? 'selected' : ''}>${d.label}</option>`).join('')}</select>
+          </div>
+          <div class="ex-fld">
+            <label>分类</label>
+            <select data-f="category"><option value="">不限分类</option>${((categories && categories.expense) || []).map((c) => `<option value="${esc(c)}" ${r.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+          </div>
+          <div class="ex-fld">
+            <label>起点日期</label>
+            <input type="date" data-f="from" value="${esc(r.from || '')}">
+          </div>
+          <div class="ex-fld">
+            <label>终点日期</label>
+            <input type="date" data-f="to" value="${esc(r.to || '')}">
+          </div>
+          <div class="ex-fld">
+            <label>金额下限(元)</label>
+            <input type="number" step="0.01" min="0" data-f="min" value="${r.min ?? ''}" placeholder="不限">
+          </div>
+          <div class="ex-fld">
+            <label>金额上限(元)</label>
+            <input type="number" step="0.01" min="0" data-f="max" value="${r.max ?? ''}" placeholder="不限">
+          </div>
+        </div>
+        <div class="ex-rule-hit" data-hit="${i}"></div>
+      </div>`).join('')
+  }
+  // 实时试算：告诉用户这条规则会剔除多少笔、多少钱（避免规则写错静默失效）
+  let exTestTimer = null
+  function exTestRulesDebounced() {
+    clearTimeout(exTestTimer)
+    exTestTimer = setTimeout(exTestRules, 400)
+  }
+  async function exTestRules() {
+    const rules = exRules.filter((r) => r.merchant)
+    if (!rules.length) {
+      document.querySelectorAll('[data-hit]').forEach((el) => { el.textContent = '' })
+      return
+    }
+    try {
+      const f = {}
+      if (exState.range === 'month') f.month = $('ex-month').value
+      else if (exState.range === 'custom') { f.from = $('ex-from').value; f.to = $('ex-to').value }
+      if (exState.channel && exState.channel !== 'all') f.channel = exState.channel
+      if ($('ex-category').value) f.category = $('ex-category').value
+      const d = await api('/api/export/test-exclude', { method: 'POST', body: { ...f, rules } })
+      const byId = new Map(d.rules.map((x) => [x.label, x]))
+      exRules.forEach((r, i) => {
+        const el = document.querySelector(`[data-hit="${i}"]`)
+        if (!el) return
+        if (!r.merchant) { el.innerHTML = '<span class="warn">请填写商家名</span>'; return }
+        // 用 label 反查（后端按数组顺序返回，这里稳妥用索引）
+        const hit = d.rules[i]
+        if (!hit) { el.textContent = ''; return }
+        el.innerHTML = hit.count
+          ? `<span class="ok">✓ 将剔除 ${hit.count} 笔，合计 ¥${hit.amount.toFixed(2)}</span>`
+          : '<span class="warn">⚠ 当前筛选下没有命中任何账单</span>'
+      })
+      const note = $('ex-exnote')
+      if (note) note.innerHTML = `本次导出共 <b>${d.total}</b> 笔，剔除后剩 <b>${d.keptN}</b> 笔`
+    } catch { /* 试算失败不打断编辑 */ }
+  }
+  // 从后端读取已保存的偏好
+  async function exLoadPrefs() {
+    try {
+      const p = await api('/api/export/prefs')
+      exRules = Array.isArray(p.excludeRules) ? p.excludeRules : []
+      exExcludeOn = p.excludeOn !== false
+      const on = $('ex-ex-on')
+      if (on) on.checked = exExcludeOn
+      exRenderRules()
+      exTestRules()
+    } catch { exRules = []; exRenderRules() }
+  }
+  async function exLoadMerchants() {
+    try {
+      exMerchants = await api('/api/export/merchants') || []
+      let dl = $('ex-merchant-list')
+      if (!dl) {
+        dl = document.createElement('datalist')
+        dl.id = 'ex-merchant-list'
+        document.body.appendChild(dl)
+      }
+      dl.innerHTML = exMerchants.map((m) => `<option value="${esc(m.merchant)}">${m.n} 笔</option>`).join('')
+    } catch { /* 无候选也能手输 */ }
+  }
+  async function exSavePrefs() {
+    const btn = $('ex-ex-save')
+    const old = btn.textContent
+    btn.disabled = true
+    try {
+      await api('/api/export/prefs', {
+        method: 'POST',
+        body: {
+          excludeRules: exRules, excludeOn: exExcludeOn,
+          range: exState.range, channel: exState.channel, category: $('ex-category').value,
+          month: $('ex-month').value, from: $('ex-from').value, to: $('ex-to').value,
+          blocks: {
+            charts: $('ex-b-charts').checked, ai: $('ex-b-ai').checked,
+            budget: $('ex-b-budget').checked, detail: $('ex-b-detail').checked,
+          },
+        },
+      })
+      btn.textContent = '✓ 已保存'
+      exRefreshStat().catch(() => {})
+      setTimeout(() => { btn.textContent = old }, 1400)
+    } catch (e) {
+      btn.textContent = '保存失败'
+      setTimeout(() => { btn.textContent = old }, 1600)
+    } finally { btn.disabled = false }
   }
   // 带令牌的下载直链（浏览器原生下载，大文件也不占内存）
   function exDownload(path, qs) {
@@ -720,6 +882,8 @@
       d.setDate(1)
       $('ex-from').value = d.toISOString().slice(0, 10)
     }
+    // 先载入已保存的偏好与商家候选，再统计（保证统计口径含剔除规则）
+    await Promise.all([exLoadPrefs(), exLoadMerchants()])
     await exRefreshStat()
     // PDF 能力提示（没装 Edge/Chrome 时提前告知，不等到点按钮才报错）
     try {
@@ -734,9 +898,14 @@
     try {
       const d = await api('/api/export/preview?' + exQuery())
       const r = (n) => '¥' + Math.abs(Number(n) || 0).toFixed(2)
-      box.innerHTML = d.count
+      let html = d.count
         ? `${esc(d.rangeLabel)} · <b>${d.count}</b> 笔 支出 <b class="ex-big expense">${r(d.expense)}</b> 收入 <b class="income">${r(d.income)}</b> 结余 <b>${(d.net >= 0 ? '+' : '-') + r(d.net)}</b>`
         : `${esc(d.rangeLabel)} · 该条件下没有记录`
+      // 剔除了多少，直接在统计行里说清楚，避免"数字对不上"的疑惑
+      if (d.exclude && d.exclude.count) {
+        html += `<div class="ex-exnote">🚫 已按偏好剔除 <b>${d.exclude.count}</b> 笔 · <b>${r(d.exclude.amount)}</b>（原始 ${d.rawCount} 笔）</div>`
+      }
+      box.innerHTML = html
     } catch (e) {
       box.textContent = '统计失败：' + (e.message || '网络异常')
     }
@@ -757,10 +926,64 @@
     $('ex-daterow').classList.toggle('hidden', exState.range !== 'custom')
   })
   bindSeg($('ex-channel'), 'channel')
-  $('ex-month').addEventListener('change', () => exRefreshStat().catch(() => {}))
-  $('ex-from').addEventListener('change', () => exRefreshStat().catch(() => {}))
-  $('ex-to').addEventListener('change', () => exRefreshStat().catch(() => {}))
-  $('ex-category').addEventListener('change', () => exRefreshStat().catch(() => {}))
+  $('ex-month').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
+  $('ex-from').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
+  $('ex-to').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
+  $('ex-category').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
+
+  // ---- 排除规则交互 ----
+  const exRulesBox = $('ex-ex-list')
+  if (exRulesBox) {
+    // 字段编辑：input 事件即时写入 exRules，并触发防抖试算
+    exRulesBox.addEventListener('input', (e) => {
+      const field = e.target.closest('[data-f]')
+      if (!field) return
+      const card = field.closest('.ex-rule')
+      const r = exRules[Number(card.dataset.i)]
+      if (!r) return
+      const k = field.dataset.f
+      r[k] = field.type === 'number' ? (field.value === '' ? '' : Number(field.value)) : field.value
+      const sum = card.querySelector('.ex-rule-sum')
+      if (sum) sum.textContent = exRuleSummary(r)
+      exTestRulesDebounced()
+    })
+    exRulesBox.addEventListener('change', (e) => {
+      if (e.target.closest('[data-f]')) exTestRulesDebounced()
+    })
+    // 上移 / 删除
+    exRulesBox.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]')
+      if (!btn) return
+      const i = Number(btn.closest('.ex-rule').dataset.i)
+      if (btn.dataset.act === 'del') exRules.splice(i, 1)
+      else if (btn.dataset.act === 'up' && i > 0) {
+        const t = exRules[i - 1]; exRules[i - 1] = exRules[i]; exRules[i] = t
+      }
+      exRenderRules()
+      exTestRules()
+      exRefreshStat().catch(() => {})
+    })
+  }
+  const exAddBtn = $('ex-ex-add')
+  if (exAddBtn) {
+    exAddBtn.addEventListener('click', () => {
+      exRules.push({ id: 'r' + Date.now().toString(36), merchant: '', direction: '', from: '', to: '', min: '', max: '', category: '', enabled: true })
+      exRenderRules()
+      // 聚焦新规则的商家输入框
+      const inputs = exRulesBox.querySelectorAll('[data-f="merchant"]')
+      const last = inputs[inputs.length - 1]
+      if (last) last.focus()
+    })
+  }
+  const exSaveBtn = $('ex-ex-save')
+  if (exSaveBtn) exSaveBtn.addEventListener('click', () => exSavePrefs())
+  const exOnBtn = $('ex-ex-on')
+  if (exOnBtn) {
+    exOnBtn.addEventListener('change', () => {
+      exExcludeOn = exOnBtn.checked
+      exRefreshStat().catch(() => {})
+    })
+  }
 
   $('ex-xlsx').addEventListener('click', () => exDownload('/api/export/bills', exQuery({ format: 'xlsx' })))
   $('ex-csv').addEventListener('click', () => exDownload('/api/export/bills', exQuery({ format: 'csv' })))

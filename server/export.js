@@ -13,6 +13,96 @@ const SOURCE_LABEL = { csv: '账单导入', email: '邮件账单', manual: '手�
 
 export function channelLabel(k) { return ACCOUNT_LABEL[k] || k || '其他' }
 
+// ================= 排除规则（导出时剔除指定商家的指定部分账单）=================
+// 一条规则 = 商家名（必填，支持包含匹配）+ 可选限定条件：
+//   direction : 只剔除该方向的账单（expense/income/refund/transfer）
+//   from / to : 只剔除该时间区间内的账单（YYYY-MM-DD）
+//   min / max : 只剔除金额落在 [min, max] 区间的账单（绝对值，元）
+//   category  : 只剔除该分类的账单
+// 限定条件全空 = 剔除该商家的全部账单。字段留空即"不限定"。
+export const EXCLUDE_DIRECTIONS = ['expense', 'income', 'refund', 'transfer']
+
+function normRule(r = {}) {
+  const str = (v) => (typeof v === 'string' ? v.trim() : '')
+  const num = (v) => {
+    if (v === '' || v === null || v === undefined) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.abs(n) : null
+  }
+  const out = {
+    id: str(r.id) || 'r' + Math.random().toString(36).slice(2, 9),
+    merchant: str(r.merchant),
+    direction: EXCLUDE_DIRECTIONS.includes(r.direction) ? r.direction : '',
+    from: /^\d{4}-\d{2}-\d{2}$/.test(str(r.from)) ? str(r.from) : '',
+    to: /^\d{4}-\d{2}-\d{2}$/.test(str(r.to)) ? str(r.to) : '',
+    min: num(r.min),
+    max: num(r.max),
+    category: str(r.category),
+    enabled: r.enabled === undefined ? true : Boolean(r.enabled),
+    note: str(r.note),
+  }
+  // 金额区间写反了自动交换，避免规则静默失效
+  if (out.min !== null && out.max !== null && out.min > out.max) {
+    const t = out.min; out.min = out.max; out.max = t
+  }
+  return out
+}
+
+export function normalizeRules(list) {
+  return (Array.isArray(list) ? list : []).map(normRule).filter((r) => r.merchant)
+}
+
+// 单条规则是否命中某笔交易
+export function ruleMatches(rule, row) {
+  if (!rule || !rule.enabled || !rule.merchant) return false
+  const m = String(row.merchant || '')
+  if (!m || !m.includes(rule.merchant)) return false
+  if (rule.direction && row.direction !== rule.direction) return false
+  if (rule.category && (row.category || '未分类') !== rule.category) return false
+  if (rule.from || rule.to) {
+    const day = String(row.ts || '').slice(0, 10)
+    if (rule.from && day < rule.from) return false
+    if (rule.to && day > rule.to) return false
+  }
+  const amt = Math.abs(Number(row.amount) || 0)
+  if (rule.min !== null && amt < rule.min) return false
+  if (rule.max !== null && amt > rule.max) return false
+  return true
+}
+
+// 该笔交易命中的第一条规则（用于标记来源，便于用户在报告里核对剔除了什么）
+export function firstMatch(rules, row) {
+  for (const r of rules) if (ruleMatches(r, row)) return r
+  return null
+}
+
+// 按规则拆分：保留 / 剔除。返回 excluded 明细便于预览与报告标注。
+export function applyExcludes(rows, rules) {
+  const active = normalizeRules(rules)
+  if (!active.length) return { kept: rows, excluded: [], active: [] }
+  const kept = []
+  const excluded = []
+  for (const row of rows) {
+    const hit = firstMatch(active, row)
+    if (hit) excluded.push({ ...row, _ruleId: hit.id, _ruleMerchant: hit.merchant })
+    else kept.push(row)
+  }
+  return { kept, excluded, active }
+}
+
+// 规则的中文描述（前端列表和报告里都用它）
+export function ruleLabel(rule) {
+  const r = normRule(rule)
+  const parts = []
+  if (r.direction) parts.push(DIRECTION_LABEL[r.direction] || r.direction)
+  if (r.category) parts.push(r.category)
+  if (r.min !== null && r.max !== null) parts.push(`¥${r.min}~¥${r.max}`)
+  else if (r.min !== null) parts.push(`≥¥${r.min}`)
+  else if (r.max !== null) parts.push(`≤¥${r.max}`)
+  if (r.from || r.to) parts.push(`${r.from || '最早'}~${r.to || '今天'}`)
+  return `「${r.merchant}」${parts.length ? ' 的 ' + parts.join(' · ') : ' 的全部账单'}`
+}
+
 // ---- 筛选条件 → SQL WHERE 片段 ----
 function buildWhere({ month, from, to, channel, category } = {}) {
   const cond = ["amount IS NOT NULL"]
@@ -102,6 +192,23 @@ export async function buildXlsx(rows, meta = {}) {
   ])
   sumWs['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 14 }]
   XLSX.utils.book_append_sheet(wb, sumWs, '汇总')
+  // 第三张表：被剔除的账单（有排除规则命中时才生成），让导出结果可自证口径
+  const excluded = Array.isArray(meta.excluded) ? meta.excluded : []
+  if (excluded.length) {
+    const exWs = XLSX.utils.aoa_to_sheet([
+      ['以下账单已按导出偏好剔除，未计入「账本」「汇总」'],
+      ['剔除规则', '笔数', '金额(元)'],
+      ...normalizeRules(meta.excludeRules || []).map((r) => {
+        const hit = excluded.filter((e) => e._ruleId === r.id)
+        return [ruleLabel(r), hit.length, -hit.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0)]
+      }).filter((row) => row[1] > 0),
+      ['合计', excluded.length, -excluded.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0)],
+      [''],
+      ...toMatrix(excluded.sort((a, b) => String(b.ts).localeCompare(String(a.ts)))),
+    ])
+    exWs['!cols'] = [{ wch: 38 }, { wch: 8 }, { wch: 13 }, { wch: 20 }, { wch: 22 }, { wch: 10 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 26 }]
+    XLSX.utils.book_append_sheet(wb, exWs, '已剔除')
+  }
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
 }
 
@@ -250,6 +357,26 @@ export function buildExportHtml({ rows, meta = {}, blocks = {}, narrative = '', 
     ${alts.length ? `<h3>省钱与升级建议</h3>${alts.map((a) => `<div class="alt"><b>${esc(a.product)}</b>${a.reason ? ` <span class="muted">（${esc(a.reason)}）</span>` : ''}${a.cheaperText ? `<div class="alt-line"><span class="tag green">省钱</span>${esc(a.cheaperText).replace(/\n/g, '<br>')}</div>` : ''}${a.betterText ? `<div class="alt-line"><span class="tag blue">升级</span>${esc(a.betterText).replace(/\n/g, '<br>')}</div>` : ''}</div>`).join('')}` : ''}
   </section>` : ''
 
+  // 已剔除说明：让报告自证口径（剔了谁、多少笔、多少钱），便于事后对账
+  const exRules = normalizeRules(meta.excludeRules || [])
+  const excluded = Array.isArray(meta.excluded) ? meta.excluded : []
+  const excludeSection = excluded.length ? `
+  <section class="excl">
+    <h3>已按偏好剔除 <span class="muted" style="font-weight:400">（以下账单未计入本报告统计）</span></h3>
+    <table class="tbl">
+      <thead><tr><th style="width:40%">剔除规则</th><th style="width:14%">笔数</th><th class="r">金额</th></tr></thead>
+      <tbody>
+        ${exRules.map((r) => {
+          const hit = excluded.filter((e) => e._ruleId === r.id)
+          if (!hit.length) return ''
+          const amt = hit.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0)
+          return `<tr><td>${esc(ruleLabel(r))}</td><td class="muted">${hit.length} 笔</td><td class="r red">${yuan(amt)}</td></tr>`
+        }).join('')}
+        <tr><td class="muted">合计</td><td class="muted">${excluded.length} 笔</td><td class="r red">${yuan(excluded.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0))}</td></tr>
+      </tbody>
+    </table>
+  </section>` : ''
+
   const detailSection = blocks.detail ? `
   <section class="page-break">
     <h3>逐笔明细（共 ${rows.length} 笔）</h3>
@@ -300,12 +427,15 @@ export function buildExportHtml({ rows, meta = {}, blocks = {}, narrative = '', 
   .tag.green { background: #E8F8EE; color: #1D8A3E; }
   .tag.blue { background: #E9F2FF; color: #0A5BD3; }
   footer { margin-top: 26px; padding-top: 11px; border-top: 1px solid #E5E5EA; color: #86868B; font-size: 10.5px; display: flex; justify-content: space-between; }
+  .excl { background: #FFF8F0; border: 1px solid #FFE0B2; border-radius: 10px; padding: 8px 14px 12px; }
+  .excl h3 { border-left-color: #E8890C; margin-top: 10px; }
 </style></head><body>
 <header class="hero">
   <h1>💰 PennyWise 账单分析报告</h1>
   <div class="sub">${esc(rangeLabel)} · 生成于 ${fmtTime(new Date().toISOString())}</div>
-  <div class="chips">${chip('范围：' + rangeLabel)}${chip('渠道：' + (meta.channelLabel || '全部'))}${chip('分类：' + (meta.category || '全部'))}${chip('共 ' + s.count + ' 笔')}</div>
+  <div class="chips">${chip('范围：' + rangeLabel)}${chip('渠道：' + (meta.channelLabel || '全部'))}${chip('分类：' + (meta.category || '全部'))}${chip('共 ' + s.count + ' 笔')}${excluded.length ? chip('已剔除 ' + excluded.length + ' 笔') : ''}</div>
 </header>
+${excludeSection}
 ${overview}
 ${aiSection}
 ${budgetSection}
@@ -360,6 +490,65 @@ export function budgetExecution(month) {
     ).get(month + '%', b.category)?.s ?? 0)
     return { category: b.category, limit: Number(b.limit_amount), spent }
   })
+}
+
+// ================= 导出偏好（持久化在 meta 表）=================
+// 存的不只是排除规则，还有上次的筛选/区块勾选，下次打开导出页直接复用。
+const PREF_KEY = 'export_prefs'
+
+const DEFAULT_PREFS = {
+  excludeRules: [],   // 排除规则数组
+  excludeOn: true,    // 总开关：是否应用排除规则
+  channel: 'all',
+  category: '',
+  range: 'all',
+  month: '',
+  from: '',
+  to: '',
+  blocks: { charts: true, ai: false, budget: true, detail: false },
+}
+
+export function getExportPrefs() {
+  try {
+    const raw = db.prepare('SELECT v FROM meta WHERE k = ?').get(PREF_KEY)?.v
+    const saved = raw ? JSON.parse(raw) : {}
+    return {
+      ...DEFAULT_PREFS,
+      ...saved,
+      blocks: { ...DEFAULT_PREFS.blocks, ...(saved.blocks || {}) },
+      excludeRules: normalizeRules(saved.excludeRules),
+      excludeOn: saved.excludeOn === undefined ? true : Boolean(saved.excludeOn),
+    }
+  } catch { return { ...DEFAULT_PREFS, blocks: { ...DEFAULT_PREFS.blocks } } }
+}
+
+export function saveExportPrefs(patch = {}) {
+  const cur = getExportPrefs()
+  const next = {
+    ...cur,
+    ...patch,
+    blocks: { ...cur.blocks, ...(patch.blocks || {}) },
+    excludeRules: patch.excludeRules !== undefined ? normalizeRules(patch.excludeRules) : cur.excludeRules,
+  }
+  db.prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v")
+    .run(PREF_KEY, JSON.stringify(next))
+  return next
+}
+
+// 商家清单（供前端做排除规则的下拉/自动补全）：出现次数 + 累计支出，按笔数倒序
+export function listMerchants({ q = '', limit = 300 } = {}) {
+  const rows = db.prepare(`
+    SELECT merchant,
+           COUNT(*) AS n,
+           SUM(CASE WHEN direction = 'expense' THEN amount ELSE 0 END) AS expense
+    FROM transactions
+    WHERE status = 'confirmed' AND merchant IS NOT NULL AND merchant <> ''
+    GROUP BY merchant
+    ORDER BY n DESC
+  `).all()
+  const kw = String(q || '').trim().toLowerCase()
+  const out = kw ? rows.filter((r) => String(r.merchant).toLowerCase().includes(kw)) : rows
+  return out.slice(0, limit).map((r) => ({ merchant: r.merchant, n: r.n, expense: Number(r.expense) || 0 }))
 }
 
 export { currentMonth, getCategories }

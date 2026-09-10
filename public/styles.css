@@ -797,7 +797,7 @@ main { position: relative; z-index: 1; }
 .day-tip-row b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .day-tip-hint { margin-top: 6px; font-size: 10px; color: var(--dim); opacity: .7; }
 
-/* ---------- 导出面板（v26.9.10） ---------- */
+/* ---------- 导出面板（v26.9.10）：筛选 / 下载 / 分析 PDF / 排除规则偏好 ---------- */
 .ex-card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 16px 18px; margin-bottom: 14px;
@@ -836,6 +836,38 @@ main { position: relative; z-index: 1; }
 .btn-sm { flex: none; min-width: 0; padding: 7px 12px; font-size: 13px; }
 .btn-ghost { background: transparent; border: 1px solid var(--border2); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---- 导出偏好：剔除规则 ---- */
+.ex-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ex-switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); cursor: pointer; flex: none; }
+.ex-switch input { width: auto; accent-color: var(--accent-fill); }
+.ex-exlist { margin: 10px 0 2px; }
+.ex-exempty { color: var(--dim); font-size: 13px; padding: 10px 2px; }
+.ex-rule {
+  border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px;
+  margin-bottom: 10px; background: var(--card2, rgba(127,127,127,.04));
+}
+.ex-rule-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ex-rule-head .ex-rule-idx {
+  flex: none; width: 20px; height: 20px; border-radius: 6px; font-size: 11px;
+  display: grid; place-items: center; background: var(--border); color: var(--dim);
+}
+.ex-rule-head .ex-rule-sum { flex: 1; font-size: 12.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-rule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; }
+.ex-fld { display: flex; flex-direction: column; gap: 3px; }
+.ex-fld label { font-size: 11.5px; color: var(--dim); }
+.ex-fld input, .ex-fld select { padding: 6px 8px; font-size: 13px; border-radius: 7px; }
+.ex-fld-wide { grid-column: 1 / -1; }
+.ex-rule-hit { margin-top: 8px; font-size: 12px; color: var(--dim); }
+.ex-rule-hit .ok { color: #1D8A3E; }
+.ex-rule-hit .warn { color: #C77700; }
+.ex-rule-act { display: flex; gap: 6px; flex: none; }
+.ex-icon-btn {
+  width: 28px; height: 28px; padding: 0; border-radius: 7px; font-size: 13px;
+  display: grid; place-items: center; background: transparent; border: 1px solid var(--border2);
+}
+.ex-exnote { margin-top: 6px; font-size: 12.5px; color: var(--dim); }
+.ex-exnote b { color: var(--text); }
 @media (max-width: 560px) {
   .ex-row { flex-wrap: wrap; }
   .ex-label { width: 100%; }
