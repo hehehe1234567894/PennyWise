@@ -13,7 +13,7 @@ import { analyzeBillForAlternatives } from './recommend.js'
 import { auditMonth, buildAuditCsv } from './audit.js'
 import { classifyPreview, classifyPending } from './classify.js'
 import { qualityCheck } from './quality.js'
-import { queryRows, buildCsv, buildXlsx, summarize, buildExportHtml, htmlToPdf, monthlyExpenseTrend, budgetExecution, channelLabel, findBrowser, applyExcludes, normalizeRules, ruleMatches, listMerchants, getExportPrefs, saveExportPrefs, ruleLabel } from './export.js'
+import { queryRows, buildCsv, buildXlsx, summarize, buildExportHtml, htmlToPdf, monthlyExpenseTrend, budgetExecution, channelLabel, findBrowser, applyExcludes, applyReplaces, normalizeRules, normalizeReplaces, ruleMatches, listMerchants, getExportPrefs, saveExportPrefs, ruleLabel, replaceLabel } from './export.js'
 import { detectImage, saveImage, autoConfirmFrom, captureTextCore, captureImageCore } from './capture-core.js'
 import { DIRECTIONS, ACCOUNTS, DEFAULT_CATEGORIES } from './categories.js'
 import { pushEvent, recentEvents, onEvent } from './notify.js'
@@ -840,13 +840,25 @@ function exportExcludes(q = {}) {
   const prefs = getExportPrefs()
   return prefs.excludeOn ? prefs.excludeRules : []
 }
-// 查询 + 应用排除规则，返回 { rows, excluded, rules }
+// 取本次导出要应用的替换规则：显式传 replaces=JSON 优先，否则用已存偏好；支持 noreplace=1 跳过
+function exportReplaces(q = {}) {
+  if (q.noreplace === '1' || q.noreplace === 'true') return []
+  if (typeof q.replaces === 'string' && q.replaces) {
+    try { return normalizeReplaces(JSON.parse(q.replaces)) } catch { /* 解析失败则退回偏好 */ }
+  }
+  const prefs = getExportPrefs()
+  return prefs.replaceOn ? prefs.replaceRules : []
+}
+// 查询 → 先替换 → 再剔除，返回最终行与两侧留痕信息
+// 顺序很重要：替换先做，这样剔除规则可以按"替换后的商家名"来匹配
 function queryRowsFiltered(q = {}) {
   const f = exportFilter(q)
   const raw = queryRows(f)
+  const replaces = exportReplaces(q)
+  const { rows: afterReplace, applied } = applyReplaces(raw, replaces)
   const rules = exportExcludes(q)
-  const { kept, excluded } = applyExcludes(raw, rules)
-  return { f, rows: kept, excluded, rules }
+  const { kept, excluded } = applyExcludes(afterReplace, rules)
+  return { f, rows: kept, excluded, rules, applied, replaces }
 }
 function rangeLabelOf(f) {
   if (f.month) return f.month.replace('-', '年') + '月'
@@ -859,11 +871,13 @@ function attachName(res, base, ext) {
   res.set('Content-Disposition', `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${encodeURIComponent(base + '.' + ext)}`)
 }
 
-// 导出预览：给前端显示"将导出多少笔、合计多少"（同时告知剔除了多少）
+// 导出预览：给前端显示"将导出多少笔、合计多少"（同时告知替换/剔除了多少）
 app.get('/api/export/preview', (req, res) => {
   try {
-    const { f, rows, excluded, rules } = queryRowsFiltered(req.query)
+    const { f, rows, excluded, rules, applied, replaces } = queryRowsFiltered(req.query)
     const exSum = excluded.reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0)
+    const rpSum = applied.reduce((s, a) => s + a.amount, 0)
+    const rpN = applied.reduce((s, a) => s + a.count, 0)
     res.json({
       ok: true,
       data: {
@@ -871,6 +885,7 @@ app.get('/api/export/preview', (req, res) => {
         rangeLabel: rangeLabelOf(f),
         hasPdf: Boolean(findBrowser()),
         exclude: { count: excluded.length, amount: exSum, rules: rules.length, labels: rules.map(ruleLabel) },
+        replace: { count: rpN, amount: rpSum, rules: replaces.length, items: applied },
         rawCount: rows.length + excluded.length,
       },
     })
@@ -880,10 +895,11 @@ app.get('/api/export/preview', (req, res) => {
 // 账单下载：format=xlsx|csv
 app.get('/api/export/bills', async (req, res) => {
   try {
-    const { f, rows, excluded, rules } = queryRowsFiltered(req.query)
+    const { f, rows, excluded, rules, applied } = queryRowsFiltered(req.query)
     if (!rows.length) return fail(res, 404, 'empty', '该筛选条件下没有记录')
     const fmt = req.query.format === 'csv' ? 'csv' : 'xlsx'
-    const base = `PennyWise账单_${rangeLabelOf(f)}_${f.channel === 'all' ? '全部渠道' : channelLabel(f.channel)}${f.category ? '_' + f.category : ''}${excluded.length ? '_已剔除' + excluded.length + '笔' : ''}`
+    const rpN = applied.reduce((s, a) => s + a.count, 0)
+    const base = `PennyWise账单_${rangeLabelOf(f)}_${f.channel === 'all' ? '全部渠道' : channelLabel(f.channel)}${f.category ? '_' + f.category : ''}${rpN ? '_已替换' + rpN + '笔' : ''}${excluded.length ? '_已剔除' + excluded.length + '笔' : ''}`
     res.set('Cache-Control', 'no-store')
     if (fmt === 'csv') {
       res.set('Content-Type', 'text/csv; charset=utf-8')
@@ -894,7 +910,7 @@ app.get('/api/export/bills', async (req, res) => {
       rangeLabel: rangeLabelOf(f),
       channelLabel: f.channel === 'all' ? '全部' : channelLabel(f.channel),
       category: f.category,
-      excluded, excludeRules: rules,
+      excluded, excludeRules: rules, appliedReplaces: applied,
     })
     res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     attachName(res, base, 'xlsx')
@@ -913,7 +929,7 @@ app.get('/api/export/report.html', async (req, res) => {
 // 生成分析报告（含可选 AI 分析）：blocks=charts,ai,budget,detail（默认全开）
 // 排除规则通过 blocks 之外的 excludes / noexclude 控制，同样作用于报告统计口径
 async function buildExportReport(q = {}) {
-  const { f, rows, excluded, rules } = queryRowsFiltered(q)
+  const { f, rows, excluded, rules, applied } = queryRowsFiltered(q)
   if (!rows.length) { const e = new Error('该筛选条件下没有记录'); e.code = 'empty'; throw e }
   // blocks 若显式传了（逗号分隔或 1/0 单块），按需解析；否则默认四块全开
   const on = (k) => q[k] === undefined ? true : (q[k] === '1' || q[k] === 'true')
@@ -923,7 +939,7 @@ async function buildExportReport(q = {}) {
     rangeLabel,
     channelLabel: f.channel === 'all' ? '全部' : channelLabel(f.channel),
     category: f.category || '全部',
-    excluded, excludeRules: rules,
+    excluded, excludeRules: rules, appliedReplaces: applied,
   }
 
   let narrative = ''
@@ -977,8 +993,9 @@ async function buildExportReport(q = {}) {
   }
   const trend = [...trendMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([month, expense]) => ({ month, expense }))
   const html = buildExportHtml({ rows, meta, blocks, narrative, alts, budgets, trend })
-  const base = `PennyWise分析报告_${rangeLabel}${excluded.length ? '_已剔除' + excluded.length + '笔' : ''}`
-  return { html, base, rows, excluded }
+  const rpN = applied.reduce((s, a) => s + a.count, 0)
+  const base = `PennyWise分析报告_${rangeLabel}${rpN ? '_已替换' + rpN + '笔' : ''}${excluded.length ? '_已剔除' + excluded.length + '笔' : ''}`
+  return { html, base, rows, excluded, applied }
 }
 
 // ---- 导出偏好：排除规则 + 上次筛选，读写都走这个接口 ----
@@ -1001,21 +1018,34 @@ app.get('/api/export/merchants', (req, res) => {
 })
 
 // 试算：给一组候选规则，返回各自命中多少笔、多少钱（前端编辑规则时实时反馈）
+// 同时支持剔除（rules）与替换（replaces）两套规则；替换的试算先于剔除，与导出顺序一致
 app.post('/api/export/test-exclude', (req, res) => {
   try {
     const rules = normalizeRules(req.body?.rules)
+    const replaces = normalizeReplaces(req.body?.replaces)
     const f = exportFilter(req.body || {})
     const raw = queryRows(f)
-    const result = rules.map((r) => {
-      const hit = raw.filter((row) => ruleMatches(r, row))
+    // 替换先应用（导出也是这个顺序），剔除规则据此再匹配替换后的商家名
+    const { rows: afterReplace } = applyReplaces(raw, replaces)
+    const calc = (list, source, labelFn) => list.map((r) => {
+      const hit = source.filter((row) => ruleMatches(r, row))
       return {
-        id: r.id, label: ruleLabel(r), count: hit.length,
+        id: r.id, label: labelFn(r), count: hit.length,
         amount: hit.reduce((s, x) => s + Math.abs(Number(x.amount) || 0), 0),
         sample: hit.slice(0, 3).map((x) => ({ ts: String(x.ts).slice(0, 10), merchant: x.merchant, amount: x.amount })),
       }
     })
-    const keptN = raw.length - raw.filter((row) => rules.some((r) => ruleMatches(r, row))).length
-    res.json({ ok: true, data: { total: raw.length, keptN, rules: result } })
+    const result = calc(rules, afterReplace, ruleLabel)
+    const repl = calc(replaces, raw, replaceLabel)
+    const keptN = afterReplace.length - afterReplace.filter((row) => rules.some((r) => ruleMatches(r, row))).length
+    res.json({
+      ok: true,
+      data: {
+        total: raw.length, keptN, rules: result,
+        replaces: repl,
+        replacedN: repl.reduce((s, x) => s + x.count, 0),
+      },
+    })
   } catch (e) { fail(res, 500, 'export_error', String(e?.message || e).slice(0, 200)) }
 })
 

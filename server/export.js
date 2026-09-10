@@ -13,22 +13,25 @@ const SOURCE_LABEL = { csv: '账单导入', email: '邮件账单', manual: '手�
 
 export function channelLabel(k) { return ACCOUNT_LABEL[k] || k || '其他' }
 
-// ================= 排除规则（导出时剔除指定商家的指定部分账单）=================
-// 一条规则 = 商家名（必填，支持包含匹配）+ 可选限定条件：
-//   direction : 只剔除该方向的账单（expense/income/refund/transfer）
-//   from / to : 只剔除该时间区间内的账单（YYYY-MM-DD）
-//   min / max : 只剔除金额落在 [min, max] 区间的账单（绝对值，元）
-//   category  : 只剔除该分类的账单
-// 限定条件全空 = 剔除该商家的全部账单。字段留空即"不限定"。
+// ================= 规则引擎（剔除 / 替换 共用匹配条件）=================
+// 匹配条件（两种规则完全一致）：
+//   merchant  : 商家名（必填，包含匹配）
+//   direction : 限定方向（expense/income/refund/transfer）
+//   from / to : 限定时间区间（YYYY-MM-DD）
+//   min / max : 限定金额区间（绝对值，元）
+//   category  : 限定分类
+// 剔除规则：条件全空 = 剔除该商家全部账单
+// 替换规则：条件全空 = 替换该商家全部账单
 export const EXCLUDE_DIRECTIONS = ['expense', 'income', 'refund', 'transfer']
 
-function normRule(r = {}) {
-  const str = (v) => (typeof v === 'string' ? v.trim() : '')
-  const num = (v) => {
-    if (v === '' || v === null || v === undefined) return null
-    const n = Number(v)
-    return Number.isFinite(n) ? Math.abs(n) : null
-  }
+function str(v) { return typeof v === 'string' ? v.trim() : '' }
+function num(v) {
+  if (v === '' || v === null || v === undefined) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.abs(n) : null
+}
+// 匹配条件的公共部分（剔除与替换共用，保证两套规则行为完全一致）
+function normCondition(r = {}) {
   const out = {
     id: str(r.id) || 'r' + Math.random().toString(36).slice(2, 9),
     merchant: str(r.merchant),
@@ -48,11 +51,28 @@ function normRule(r = {}) {
   return out
 }
 
+function normRule(r = {}) { return normCondition(r) }
+
 export function normalizeRules(list) {
   return (Array.isArray(list) ? list : []).map(normRule).filter((r) => r.merchant)
 }
 
-// 单条规则是否命中某笔交易
+// ---- 替换规则：命中后把商家名（可选分类）改写成目标值 ----
+// toMerchant: 替换成的商家名（必填，否则规则无效）
+// toCategory: 同时把分类改成这个（留空 = 保留原分类）
+// 注意：内部统一把"替换目标"存成 toMerchant，避免与时间上限字段 to 冲突
+function normReplace(r = {}) {
+  const out = normCondition(r)
+  out.toMerchant = str(r.toMerchant !== undefined ? r.toMerchant : r.to)
+  out.toCategory = str(r.toCategory)
+  delete out.to_merchant
+  return out
+}
+export function normalizeReplaces(list) {
+  return (Array.isArray(list) ? list : []).map(normReplace).filter((r) => r.merchant && r.toMerchant)
+}
+
+// 单条匹配条件是否命中某笔交易（剔除/替换共用）
 export function ruleMatches(rule, row) {
   if (!rule || !rule.enabled || !rule.merchant) return false
   const m = String(row.merchant || '')
@@ -90,7 +110,31 @@ export function applyExcludes(rows, rules) {
   return { kept, excluded, active }
 }
 
-// 规则的中文描述（前端列表和报告里都用它）
+// 应用替换规则：返回改写后的行 + 每条规则命中统计（用于报告标注）
+// 完全替换不留痕迹：merchant 直接换成 to，原文不保留；toCategory 给了就一并改分类。
+export function applyReplaces(rows, rules) {
+  const active = normalizeReplaces(rules)
+  if (!active.length) return { rows, applied: [], active: [] }
+  const hitCount = new Map()
+  const out = rows.map((row) => {
+    const hit = firstMatch(active, row)
+    if (!hit) return row
+    const prev = hitCount.get(hit.id) || { id: hit.id, label: replaceLabel(hit), from: hit.merchant, to: hit.toMerchant, count: 0, amount: 0 }
+    prev.count += 1
+    prev.amount += Math.abs(Number(row.amount) || 0)
+    hitCount.set(hit.id, prev)
+    return {
+      ...row,
+      merchant: hit.toMerchant,
+      category: hit.toCategory || row.category,
+      _replacedFrom: row.merchant,
+      _replaceId: hit.id,
+    }
+  })
+  return { rows: out, applied: [...hitCount.values()], active }
+}
+
+// 剔除规则的中文描述（前端列表和报告里都用它）
 export function ruleLabel(rule) {
   const r = normRule(rule)
   const parts = []
@@ -101,6 +145,21 @@ export function ruleLabel(rule) {
   else if (r.max !== null) parts.push(`≤¥${r.max}`)
   if (r.from || r.to) parts.push(`${r.from || '最早'}~${r.to || '今天'}`)
   return `「${r.merchant}」${parts.length ? ' 的 ' + parts.join(' · ') : ' 的全部账单'}`
+}
+
+// 替换规则的中文描述：突出「命中条件 → 替换目标」
+export function replaceLabel(rule) {
+  const r = normReplace(rule)
+  const parts = []
+  if (r.direction) parts.push(DIRECTION_LABEL[r.direction] || r.direction)
+  if (r.category) parts.push(r.category)
+  if (r.min !== null && r.max !== null) parts.push(`¥${r.min}~¥${r.max}`)
+  else if (r.min !== null) parts.push(`≥¥${r.min}`)
+  else if (r.max !== null) parts.push(`≤¥${r.max}`)
+  if (r.from || r.to) parts.push(`${r.from || '最早'} 至 ${r.to || '今天'}`)
+  const from = `「${r.merchant}」${parts.length ? ' 的 ' + parts.join(' · ') : ' 全部'}`
+  const to = `「${r.toMerchant}」${r.toCategory ? ' · 归入「' + r.toCategory + '」' : ''}`
+  return `${from} → ${to}`
 }
 
 // ---- 筛选条件 → SQL WHERE 片段 ----
@@ -192,7 +251,19 @@ export async function buildXlsx(rows, meta = {}) {
   ])
   sumWs['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 14 }]
   XLSX.utils.book_append_sheet(wb, sumWs, '汇总')
-  // 第三张表：被剔除的账单（有排除规则命中时才生成），让导出结果可自证口径
+  // 第三张表：已替换（有替换规则命中时才生成）
+  const applied = Array.isArray(meta.appliedReplaces) ? meta.appliedReplaces : []
+  if (applied.length) {
+    const rpWs = XLSX.utils.aoa_to_sheet([
+      ['以下账单的商家名已按导出偏好改写（账本中显示的是替换后的商家）'],
+      ['替换规则', '笔数', '金额(元)'],
+      ...applied.map((a) => [a.label || ('「' + a.from + '」 → 「' + a.to + '」'), a.count, a.amount]),
+      ['合计', applied.reduce((s, a) => s + a.count, 0), applied.reduce((s, a) => s + a.amount, 0)],
+    ])
+    rpWs['!cols'] = [{ wch: 52 }, { wch: 10 }, { wch: 14 }]
+    XLSX.utils.book_append_sheet(wb, rpWs, '已替换')
+  }
+  // 第四张表：被剔除的账单（有排除规则命中时才生成），让导出结果可自证口径
   const excluded = Array.isArray(meta.excluded) ? meta.excluded : []
   if (excluded.length) {
     const exWs = XLSX.utils.aoa_to_sheet([
@@ -357,6 +428,20 @@ export function buildExportHtml({ rows, meta = {}, blocks = {}, narrative = '', 
     ${alts.length ? `<h3>省钱与升级建议</h3>${alts.map((a) => `<div class="alt"><b>${esc(a.product)}</b>${a.reason ? ` <span class="muted">（${esc(a.reason)}）</span>` : ''}${a.cheaperText ? `<div class="alt-line"><span class="tag green">省钱</span>${esc(a.cheaperText).replace(/\n/g, '<br>')}</div>` : ''}${a.betterText ? `<div class="alt-line"><span class="tag blue">升级</span>${esc(a.betterText).replace(/\n/g, '<br>')}</div>` : ''}</div>`).join('')}` : ''}
   </section>` : ''
 
+  // 替换说明：商家名被改写后，告诉读者"原是谁、现在记成谁"，避免看不出来源
+  const applied = Array.isArray(meta.appliedReplaces) ? meta.appliedReplaces : []
+  const replaceSection = applied.length ? `
+  <section class="repl">
+    <h3>已按偏好替换商家 <span class="muted" style="font-weight:400">（下列账单的商家名已改写）</span></h3>
+    <table class="tbl">
+      <thead><tr><th style="width:56%">替换规则</th><th style="width:14%">笔数</th><th class="r">金额</th></tr></thead>
+      <tbody>
+        ${applied.map((a) => `<tr><td>${esc(a.label || ('「' + a.from + '」 → 「' + a.to + '」'))}</td><td class="muted">${a.count} 笔</td><td class="r">${yuan(a.amount)}</td></tr>`).join('')}
+        <tr><td class="muted">合计</td><td class="muted">${applied.reduce((s, a) => s + a.count, 0)} 笔</td><td class="r">${yuan(applied.reduce((s, a) => s + a.amount, 0))}</td></tr>
+      </tbody>
+    </table>
+  </section>` : ''
+
   // 已剔除说明：让报告自证口径（剔了谁、多少笔、多少钱），便于事后对账
   const exRules = normalizeRules(meta.excludeRules || [])
   const excluded = Array.isArray(meta.excluded) ? meta.excluded : []
@@ -429,12 +514,15 @@ export function buildExportHtml({ rows, meta = {}, blocks = {}, narrative = '', 
   footer { margin-top: 26px; padding-top: 11px; border-top: 1px solid #E5E5EA; color: #86868B; font-size: 10.5px; display: flex; justify-content: space-between; }
   .excl { background: #FFF8F0; border: 1px solid #FFE0B2; border-radius: 10px; padding: 8px 14px 12px; }
   .excl h3 { border-left-color: #E8890C; margin-top: 10px; }
+  .repl { background: #F0F7FF; border: 1px solid #C7E0FF; border-radius: 10px; padding: 8px 14px 12px; margin-bottom: 14px; }
+  .repl h3 { border-left-color: #0A84FF; margin-top: 10px; }
 </style></head><body>
 <header class="hero">
   <h1>💰 PennyWise 账单分析报告</h1>
   <div class="sub">${esc(rangeLabel)} · 生成于 ${fmtTime(new Date().toISOString())}</div>
-  <div class="chips">${chip('范围：' + rangeLabel)}${chip('渠道：' + (meta.channelLabel || '全部'))}${chip('分类：' + (meta.category || '全部'))}${chip('共 ' + s.count + ' 笔')}${excluded.length ? chip('已剔除 ' + excluded.length + ' 笔') : ''}</div>
+  <div class="chips">${chip('范围：' + rangeLabel)}${chip('渠道：' + (meta.channelLabel || '全部'))}${chip('分类：' + (meta.category || '全部'))}${chip('共 ' + s.count + ' 笔')}${applied.length ? chip('已替换 ' + applied.reduce((x, a) => x + a.count, 0) + ' 笔') : ''}${excluded.length ? chip('已剔除 ' + excluded.length + ' 笔') : ''}</div>
 </header>
+${replaceSection}
 ${excludeSection}
 ${overview}
 ${aiSection}
@@ -459,13 +547,32 @@ export async function htmlToPdf(html) {
   const exe = findBrowser()
   if (!exe) throw new Error('未找到 Edge/Chrome，无法生成 PDF（可手动打开网页版报告后打印为 PDF）')
   const puppeteer = (await import('puppeteer-core')).default
-  const browser = await puppeteer.launch({ executablePath: exe, headless: 'new', args: ['--disable-gpu', '--no-first-run', '--no-default-browser-check', '--no-sandbox'] })
+  // 报告 HTML 全是内联资源（SVG/CSS），不需要等外部网络。
+  // 用 domcontentloaded + 显式给足超时，避免大报告在默认 30s 导航超时上偶发失败。
+  const render = async () => {
+    const browser = await puppeteer.launch({
+      executablePath: exe, headless: 'new',
+      args: ['--disable-gpu', '--no-first-run', '--no-default-browser-check', '--no-sandbox', '--disable-extensions', '--disable-background-networking'],
+    })
+    try {
+      const page = await browser.newPage()
+      page.setDefaultNavigationTimeout(60000)
+      page.setDefaultTimeout(60000)
+      await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 60000 })
+      // 等字体就绪，保证中文排版稳定（失败也不阻塞）
+      await page.evaluate(() => (document.fonts && document.fonts.ready ? document.fonts.ready : null)).catch(() => {})
+      const buf = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '14mm', bottom: '14mm', left: '12mm', right: '12mm' } })
+      return Buffer.from(buf)
+    } finally { await browser.close() }
+  }
   try {
-    const page = await browser.newPage()
-    await page.setContent(html, { waitUntil: 'networkidle0' })
-    const buf = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '14mm', bottom: '14mm', left: '12mm', right: '12mm' } })
-    return Buffer.from(buf)
-  } finally { await browser.close() }
+    return await render()
+  } catch (e1) {
+    // 偶发的浏览器启动/渲染抖动：清场后重试一次（复用同一份 HTML，不重跑统计与 AI）
+    await new Promise((r) => setTimeout(r, 1200))
+    try { return await render() }
+    catch (e2) { throw new Error(`PDF 渲染失败：${e2?.message || e1?.message || '未知错误'}`) }
+  }
 }
 
 // ---- 月度支出趋势（给月报/导出复用）----
@@ -497,8 +604,10 @@ export function budgetExecution(month) {
 const PREF_KEY = 'export_prefs'
 
 const DEFAULT_PREFS = {
-  excludeRules: [],   // 排除规则数组
-  excludeOn: true,    // 总开关：是否应用排除规则
+  excludeRules: [],    // 剔除规则数组
+  excludeOn: true,     // 剔除总开关
+  replaceRules: [],    // 替换规则数组（把某些商家的账单换成别的商家）
+  replaceOn: true,     // 替换总开关
   channel: 'all',
   category: '',
   range: 'all',
@@ -518,8 +627,16 @@ export function getExportPrefs() {
       blocks: { ...DEFAULT_PREFS.blocks, ...(saved.blocks || {}) },
       excludeRules: normalizeRules(saved.excludeRules),
       excludeOn: saved.excludeOn === undefined ? true : Boolean(saved.excludeOn),
+      replaceRules: normalizeReplaces(saved.replaceRules),
+      replaceOn: saved.replaceOn === undefined ? true : Boolean(saved.replaceOn),
     }
-  } catch { return { ...DEFAULT_PREFS, blocks: { ...DEFAULT_PREFS.blocks } } }
+  } catch {
+    return {
+      ...DEFAULT_PREFS,
+      blocks: { ...DEFAULT_PREFS.blocks },
+      excludeRules: [], replaceRules: [],
+    }
+  }
 }
 
 export function saveExportPrefs(patch = {}) {
@@ -529,6 +646,7 @@ export function saveExportPrefs(patch = {}) {
     ...patch,
     blocks: { ...cur.blocks, ...(patch.blocks || {}) },
     excludeRules: patch.excludeRules !== undefined ? normalizeRules(patch.excludeRules) : cur.excludeRules,
+    replaceRules: patch.replaceRules !== undefined ? normalizeReplaces(patch.replaceRules) : cur.replaceRules,
   }
   db.prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v")
     .run(PREF_KEY, JSON.stringify(next))

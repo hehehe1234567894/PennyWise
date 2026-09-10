@@ -682,6 +682,9 @@
   // 排除规则（导出偏好）：长期保存在服务端 meta 表，导出时自动应用
   let exRules = []
   let exExcludeOn = true
+  // 替换规则（导出偏好）：把指定商家的账单在导出结果里记成别的商家
+  let rpRules = []
+  let rpReplaceOn = true
   let exMerchants = []      // 商家候选（用于 datalist 补全）
   const EX_DIRECTIONS = [
     { v: '', label: '不限方向' },
@@ -712,6 +715,8 @@
     // 未保存的临时改动也要立刻生效：把当前规则集直接带给服务端
     if (!exExcludeOn) p.set('noexclude', '1')
     else if (exRules.length) p.set('rules', JSON.stringify(exRules))
+    if (!rpReplaceOn) p.set('noreplace', '1')
+    else if (rpRules.length) p.set('replaces', JSON.stringify(rpRules))
     for (const [k, v] of Object.entries(extra)) p.set(k, v)
     return p.toString()
   }
@@ -729,18 +734,40 @@
     if (r.from || r.to) parts.push(`${r.from || '最早'}~${r.to || '今天'}`)
     return parts.length ? '仅剔除：' + parts.join(' · ') : '剔除该商家全部账单'
   }
-  function exRenderRules() {
-    const box = $('ex-ex-list')
+  // ---- 通用规则卡片渲染（剔除 / 替换共用；kind: 'ex' | 'rp'） ----
+  const KIND = {
+    ex: { list: 'ex-ex-list', empty: '还没有规则。点「＋ 新增剔除规则」开始，例如剔除「某某商家」里金额 ≥100 的支出。' },
+    rp: { list: 'ex-rp-list', empty: '还没有规则。点「＋ 新增替换规则」开始，例如把「杭州深度求索」在导出时记成「AI 服务」。' },
+  }
+  function rpRuleSummary(r) {
+    const parts = []
+    if (r.direction) parts.push((EX_DIRECTIONS.find((d) => d.v === r.direction) || {}).label || r.direction)
+    if (r.category) parts.push(r.category)
+    const hasMin = r.min !== '' && r.min !== null && r.min !== undefined
+    const hasMax = r.max !== '' && r.max !== null && r.max !== undefined
+    if (hasMin && hasMax) parts.push(`¥${r.min}~¥${r.max}`)
+    else if (hasMin) parts.push(`≥¥${r.min}`)
+    else if (hasMax) parts.push(`≤¥${r.max}`)
+    if (r.from || r.to) parts.push(`${r.from || '最早'}~${r.to || '今天'}`)
+    const from = parts.length ? parts.join(' · ') : '全部'
+    return `→ 「${r.toMerchant || '?'}」${r.toCategory ? ' · ' + r.toCategory : ''}（${from}）`
+  }
+  function ruleSummaryOf(kind, r) { return kind === 'ex' ? exRuleSummary(r) : rpRuleSummary(r) }
+  function rulesOf(kind) { return kind === 'ex' ? exRules : rpRules }
+  function renderRules(kind) {
+    const cfg = KIND[kind]
+    const box = $(cfg.list)
     if (!box) return
-    if (!exRules.length) {
-      box.innerHTML = '<div class="ex-exempty">还没有规则。点「＋ 新增规则」开始，例如剔除「某某商家」里金额 ≥100 的支出。</div>'
+    const list = rulesOf(kind)
+    if (!list.length) {
+      box.innerHTML = `<div class="ex-exempty">${cfg.empty}</div>`
       return
     }
-    box.innerHTML = exRules.map((r, i) => `
-      <div class="ex-rule" data-i="${i}">
+    box.innerHTML = list.map((r, i) => `
+      <div class="ex-rule" data-i="${i}" data-kind="${kind}">
         <div class="ex-rule-head">
           <span class="ex-rule-idx">${i + 1}</span>
-          <span class="ex-rule-sum">${esc(exRuleSummary(r))}</span>
+          <span class="ex-rule-sum">${esc(ruleSummaryOf(kind, r))}</span>
           <span class="ex-rule-act">
             <button class="ex-icon-btn" data-act="up" title="上移" ${i === 0 ? 'disabled' : ''}>↑</button>
             <button class="ex-icon-btn" data-act="del" title="删除">✕</button>
@@ -748,9 +775,18 @@
         </div>
         <div class="ex-rule-grid">
           <div class="ex-fld ex-fld-wide">
-            <label>商家（包含匹配）*</label>
+            <label>原商家（包含匹配）*</label>
             <input list="ex-merchant-list" data-f="merchant" value="${esc(r.merchant || '')}" placeholder="如：杭州深度求索">
           </div>
+          ${kind === 'rp' ? `
+          <div class="ex-fld">
+            <label>替换为（商家名）*</label>
+            <input list="ex-merchant-list" data-f="toMerchant" value="${esc(r.toMerchant || '')}" placeholder="如：AI 服务">
+          </div>
+          <div class="ex-fld">
+            <label>同时归入分类</label>
+            <select data-f="toCategory"><option value="">保留原分类</option>${((categories && categories.expense) || []).map((c) => `<option value="${esc(c)}" ${r.toCategory === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+          </div>` : ''}
           <div class="ex-fld">
             <label>方向</label>
             <select data-f="direction">${EX_DIRECTIONS.map((d) => `<option value="${d.v}" ${r.direction === d.v ? 'selected' : ''}>${d.label}</option>`).join('')}</select>
@@ -779,7 +815,9 @@
         <div class="ex-rule-hit" data-hit="${i}"></div>
       </div>`).join('')
   }
-  // 实时试算：告诉用户这条规则会剔除多少笔、多少钱（避免规则写错静默失效）
+  function exRenderRules() { renderRules('ex') }
+  function rpRenderRules() { renderRules('rp') }
+  // 实时试算：告诉用户这条规则会剔除/替换多少笔、多少钱（避免规则写错静默失效）
   let exTestTimer = null
   function exTestRulesDebounced() {
     clearTimeout(exTestTimer)
@@ -787,8 +825,11 @@
   }
   async function exTestRules() {
     const rules = exRules.filter((r) => r.merchant)
-    if (!rules.length) {
+    const replaces = rpRules.filter((r) => r.merchant && r.toMerchant)
+    if (!rules.length && !replaces.length) {
       document.querySelectorAll('[data-hit]').forEach((el) => { el.textContent = '' })
+      const n1 = $('ex-exnote'); if (n1) n1.textContent = ''
+      const n2 = $('ex-rpnote'); if (n2) n2.textContent = ''
       return
     }
     try {
@@ -797,13 +838,12 @@
       else if (exState.range === 'custom') { f.from = $('ex-from').value; f.to = $('ex-to').value }
       if (exState.channel && exState.channel !== 'all') f.channel = exState.channel
       if ($('ex-category').value) f.category = $('ex-category').value
-      const d = await api('/api/export/test-exclude', { method: 'POST', body: { ...f, rules } })
-      const byId = new Map(d.rules.map((x) => [x.label, x]))
+      const d = await api('/api/export/test-exclude', { method: 'POST', body: { ...f, rules, replaces } })
+      // 剔除规则：展示将剔除多少笔
       exRules.forEach((r, i) => {
-        const el = document.querySelector(`[data-hit="${i}"]`)
+        const el = document.querySelector(`.ex-rule[data-kind="ex"][data-i="${i}"] [data-hit="${i}"]`)
         if (!el) return
         if (!r.merchant) { el.innerHTML = '<span class="warn">请填写商家名</span>'; return }
-        // 用 label 反查（后端按数组顺序返回，这里稳妥用索引）
         const hit = d.rules[i]
         if (!hit) { el.textContent = ''; return }
         el.innerHTML = hit.count
@@ -812,6 +852,22 @@
       })
       const note = $('ex-exnote')
       if (note) note.innerHTML = `本次导出共 <b>${d.total}</b> 笔，剔除后剩 <b>${d.keptN}</b> 笔`
+      // 替换规则：展示将替换多少笔
+      rpRules.forEach((r, i) => {
+        const el = document.querySelector(`.ex-rule[data-kind="rp"][data-i="${i}"] [data-hit="${i}"]`)
+        if (!el) return
+        if (!r.merchant) { el.innerHTML = '<span class="warn">请填写原商家名</span>'; return }
+        if (!r.toMerchant) { el.innerHTML = '<span class="warn">请填写替换后的商家名</span>'; return }
+        const hit = d.replaces[i]
+        if (!hit) { el.textContent = ''; return }
+        el.innerHTML = hit.count
+          ? `<span class="ok">✓ 将替换 ${hit.count} 笔，合计 ¥${hit.amount.toFixed(2)}</span>`
+          : '<span class="warn">⚠ 当前筛选下没有命中任何账单</span>'
+      })
+      const note2 = $('ex-rpnote')
+      if (note2) note2.innerHTML = d.replacedN
+        ? `本次导出将替换 <b>${d.replacedN}</b> 笔账单的商家名`
+        : ''
     } catch { /* 试算失败不打断编辑 */ }
   }
   // 从后端读取已保存的偏好
@@ -820,11 +876,14 @@
       const p = await api('/api/export/prefs')
       exRules = Array.isArray(p.excludeRules) ? p.excludeRules : []
       exExcludeOn = p.excludeOn !== false
-      const on = $('ex-ex-on')
-      if (on) on.checked = exExcludeOn
+      rpRules = Array.isArray(p.replaceRules) ? p.replaceRules : []
+      rpReplaceOn = p.replaceOn !== false
+      const on = $('ex-ex-on'); if (on) on.checked = exExcludeOn
+      const on2 = $('ex-rp-on'); if (on2) on2.checked = rpReplaceOn
       exRenderRules()
+      rpRenderRules()
       exTestRules()
-    } catch { exRules = []; exRenderRules() }
+    } catch { exRules = []; rpRules = []; exRenderRules(); rpRenderRules() }
   }
   async function exLoadMerchants() {
     try {
@@ -838,8 +897,8 @@
       dl.innerHTML = exMerchants.map((m) => `<option value="${esc(m.merchant)}">${m.n} 笔</option>`).join('')
     } catch { /* 无候选也能手输 */ }
   }
-  async function exSavePrefs() {
-    const btn = $('ex-ex-save')
+  async function exSavePrefs(btnId = 'ex-ex-save') {
+    const btn = $(btnId)
     const old = btn.textContent
     btn.disabled = true
     try {
@@ -847,6 +906,7 @@
         method: 'POST',
         body: {
           excludeRules: exRules, excludeOn: exExcludeOn,
+          replaceRules: rpRules, replaceOn: rpReplaceOn,
           range: exState.range, channel: exState.channel, category: $('ex-category').value,
           month: $('ex-month').value, from: $('ex-from').value, to: $('ex-to').value,
           blocks: {
@@ -882,8 +942,9 @@
       d.setDate(1)
       $('ex-from').value = d.toISOString().slice(0, 10)
     }
-    // 先载入已保存的偏好与商家候选，再统计（保证统计口径含剔除规则）
-    await Promise.all([exLoadPrefs(), exLoadMerchants()])
+    // 先载入商家候选（规则里的商家输入框用 datalist 补全）与已保存偏好，再统计
+    await exLoadMerchants()
+    await exLoadPrefs()
     await exRefreshStat()
     // PDF 能力提示（没装 Edge/Chrome 时提前告知，不等到点按钮才报错）
     try {
@@ -901,7 +962,10 @@
       let html = d.count
         ? `${esc(d.rangeLabel)} · <b>${d.count}</b> 笔 支出 <b class="ex-big expense">${r(d.expense)}</b> 收入 <b class="income">${r(d.income)}</b> 结余 <b>${(d.net >= 0 ? '+' : '-') + r(d.net)}</b>`
         : `${esc(d.rangeLabel)} · 该条件下没有记录`
-      // 剔除了多少，直接在统计行里说清楚，避免"数字对不上"的疑惑
+      // 替换/剔除了多少，直接在统计行里说清楚，避免"数字对不上"的疑惑
+      if (d.replace && d.replace.count) {
+        html += `<div class="ex-exnote">🔁 已将 <b>${d.replace.count}</b> 笔的商家名替换 <b>${r(d.replace.amount)}</b></div>`
+      }
       if (d.exclude && d.exclude.count) {
         html += `<div class="ex-exnote">🚫 已按偏好剔除 <b>${d.exclude.count}</b> 笔 · <b>${r(d.exclude.amount)}</b>（原始 ${d.rawCount} 笔）</div>`
       }
@@ -931,56 +995,82 @@
   $('ex-to').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
   $('ex-category').addEventListener('change', () => { exRefreshStat().catch(() => {}); exTestRulesDebounced() })
 
-  // ---- 排除规则交互 ----
-  const exRulesBox = $('ex-ex-list')
-  if (exRulesBox) {
-    // 字段编辑：input 事件即时写入 exRules，并触发防抖试算
-    exRulesBox.addEventListener('input', (e) => {
+  // ---- 规则交互（剔除 / 替换 共用一套事件委托）----
+  function bindRuleBox(kind) {
+    const box = $(KIND[kind].list)
+    if (!box) return
+    const list = () => rulesOf(kind)
+    const render = () => renderRules(kind)
+    // 字段编辑：即时写入内存中的规则数组，并触发防抖试算
+    box.addEventListener('input', (e) => {
       const field = e.target.closest('[data-f]')
       if (!field) return
       const card = field.closest('.ex-rule')
-      const r = exRules[Number(card.dataset.i)]
+      const r = list()[Number(card.dataset.i)]
       if (!r) return
+      // 字段名直接写入规则对象（替换目标用 toMerchant，与时间上限 to 不冲突）
       const k = field.dataset.f
       r[k] = field.type === 'number' ? (field.value === '' ? '' : Number(field.value)) : field.value
       const sum = card.querySelector('.ex-rule-sum')
-      if (sum) sum.textContent = exRuleSummary(r)
+      if (sum) sum.textContent = ruleSummaryOf(kind, r)
       exTestRulesDebounced()
     })
-    exRulesBox.addEventListener('change', (e) => {
+    box.addEventListener('change', (e) => {
       if (e.target.closest('[data-f]')) exTestRulesDebounced()
     })
     // 上移 / 删除
-    exRulesBox.addEventListener('click', (e) => {
+    box.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-act]')
       if (!btn) return
+      const arr = list()
       const i = Number(btn.closest('.ex-rule').dataset.i)
-      if (btn.dataset.act === 'del') exRules.splice(i, 1)
+      if (btn.dataset.act === 'del') arr.splice(i, 1)
       else if (btn.dataset.act === 'up' && i > 0) {
-        const t = exRules[i - 1]; exRules[i - 1] = exRules[i]; exRules[i] = t
+        const t = arr[i - 1]; arr[i - 1] = arr[i]; arr[i] = t
       }
-      exRenderRules()
+      render()
       exTestRules()
       exRefreshStat().catch(() => {})
     })
   }
+  bindRuleBox('ex')
+  bindRuleBox('rp')
+  // 新增规则
   const exAddBtn = $('ex-ex-add')
   if (exAddBtn) {
     exAddBtn.addEventListener('click', () => {
       exRules.push({ id: 'r' + Date.now().toString(36), merchant: '', direction: '', from: '', to: '', min: '', max: '', category: '', enabled: true })
       exRenderRules()
-      // 聚焦新规则的商家输入框
-      const inputs = exRulesBox.querySelectorAll('[data-f="merchant"]')
+      const inputs = $('ex-ex-list').querySelectorAll('[data-f="merchant"]')
+      const last = inputs[inputs.length - 1]
+      if (last) last.focus()
+    })
+  }
+  const rpAddBtn = $('ex-rp-add')
+  if (rpAddBtn) {
+    rpAddBtn.addEventListener('click', () => {
+      rpRules.push({ id: 'z' + Date.now().toString(36), merchant: '', toMerchant: '', toCategory: '', direction: '', from: '', min: '', max: '', category: '', enabled: true })
+      rpRenderRules()
+      const inputs = $('ex-rp-list').querySelectorAll('[data-f="merchant"]')
       const last = inputs[inputs.length - 1]
       if (last) last.focus()
     })
   }
   const exSaveBtn = $('ex-ex-save')
   if (exSaveBtn) exSaveBtn.addEventListener('click', () => exSavePrefs())
+  const rpSaveBtn = $('ex-rp-save')
+  if (rpSaveBtn) rpSaveBtn.addEventListener('click', () => exSavePrefs('ex-rp-save'))
   const exOnBtn = $('ex-ex-on')
   if (exOnBtn) {
     exOnBtn.addEventListener('change', () => {
       exExcludeOn = exOnBtn.checked
+      exRefreshStat().catch(() => {})
+    })
+  }
+  const rpOnBtn = $('ex-rp-on')
+  if (rpOnBtn) {
+    rpOnBtn.addEventListener('change', () => {
+      rpReplaceOn = rpOnBtn.checked
       exRefreshStat().catch(() => {})
     })
   }
