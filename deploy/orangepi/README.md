@@ -21,7 +21,7 @@
 
 ```bash
 # 把仓库放到板子上（二选一）
-git clone https://github.com/OWNER/2.git
+git clone https://github.com/OWNER/PennyWise.git
 # 或从电脑拷贝：scp -r PennyWise orangepi@<板子IP>:~/
 
 cd PennyWise
