@@ -162,6 +162,7 @@ export function parseAlipayRows(rows) {
   const iInOut = col('收/支')
   const iStatus = col('交易状态')
   const iNote = col('备注')
+  const iCat = col('交易分类')
   if (iTxn < 0 || iTime < 0 || iAmt < 0) return { rows: [], error: '支付宝账单缺少关键列' }
   const out = []
   for (const r of rows.slice(headerIdx + 1)) {
@@ -171,7 +172,16 @@ export function parseAlipayRows(rows) {
     const amount = amountNum(r[iAmt])
     if (amount <= 0) continue
     const inOut = String(r[iInOut] || '').trim()
-    const direction = inOut === '收入' ? 'income' : inOut === '支出' ? 'expense' : 'transfer'
+    const billCat = iCat >= 0 ? String(r[iCat] || '').trim() : ''
+    // 资金搬运：账户互转（小荷包/余额宝 存取）、还信用卡/花呗、退款 —— 都不算真实收支
+    const FUND_MOVE = /^(账户存取|信用借还|退款)$/
+    // 支付宝会把「小荷包余额付款的真实消费」也标成「不计收支」（食堂/交通/日用…）。
+    // 以前一律按 transfer 丢掉，导致这部分消费从账本里消失；现在只有分类属于资金搬运的才跳过，
+    // 其余「不计收支」按支出入账。
+    const direction = FUND_MOVE.test(billCat)
+      ? 'transfer'
+      : inOut === '收入' ? 'income'
+        : 'expense'
     out.push({
       ext_id: 'ali-' + String(r[iTxn] || '').trim(),
       ts: csvTime(r[iTime]) || nowIso(),
@@ -181,7 +191,7 @@ export function parseAlipayRows(rows) {
       goods_name: String(r[iGoods] || '').trim().slice(0, 120),
       account: 'alipay',
       note: String(r[iNote] || '').trim().slice(0, 200),
-      raw_text: `支付宝账单 | ${r[iPeer] || ''} | ¥${amount} | ${status}`,
+      raw_text: `支付宝账单 | ${r[iPeer] || ''} | ¥${amount} | ${status}${billCat ? ' | ' + billCat : ''}`,
     })
   }
   return { rows: out }
