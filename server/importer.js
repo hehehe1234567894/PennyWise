@@ -144,6 +144,12 @@ export async function parseWechatXlsx(buf) {
   return parseWechatRows(rows)
 }
 
+// 支付宝明确标为「不计收支」的小荷包消费，只有已知的消费分类才补计支出。
+const ALIPAY_EXPENSE_CATEGORIES = new Set([
+  '餐饮美食', '文化休闲', '商业服务', '日用百货', '美容美发', '生活服务', '交通出行', '教育培训',
+])
+const ALIPAY_TRANSFER_CATEGORIES = new Set(['账户存取', '信用借还', '退款'])
+
 // ---- 支付宝账单：行数组（账单 CSV / 电子回单 CSV / HTML 表格通用）----
 export function parseAlipayRows(rows) {
   const headerIdx = rows.findIndex((r) => {
@@ -162,6 +168,7 @@ export function parseAlipayRows(rows) {
   const iInOut = col('收/支')
   const iStatus = col('交易状态')
   const iNote = col('备注')
+  const iCat = col('交易分类')
   if (iTxn < 0 || iTime < 0 || iAmt < 0) return { rows: [], error: '支付宝账单缺少关键列' }
   const out = []
   for (const r of rows.slice(headerIdx + 1)) {
@@ -171,7 +178,14 @@ export function parseAlipayRows(rows) {
     const amount = amountNum(r[iAmt])
     if (amount <= 0) continue
     const inOut = String(r[iInOut] || '').trim()
-    const direction = inOut === '收入' ? 'income' : inOut === '支出' ? 'expense' : 'transfer'
+    const billCat = iCat >= 0 ? String(r[iCat] || '').trim() : ''
+    let direction = 'transfer'
+    if (!ALIPAY_TRANSFER_CATEGORIES.has(billCat)) {
+      if (inOut === '收入') direction = 'income'
+      else if (inOut === '支出' || (inOut === '不计收支' && ALIPAY_EXPENSE_CATEGORIES.has(billCat))) {
+        direction = 'expense'
+      }
+    }
     out.push({
       ext_id: 'ali-' + String(r[iTxn] || '').trim(),
       ts: csvTime(r[iTime]) || nowIso(),
@@ -181,7 +195,7 @@ export function parseAlipayRows(rows) {
       goods_name: String(r[iGoods] || '').trim().slice(0, 120),
       account: 'alipay',
       note: String(r[iNote] || '').trim().slice(0, 200),
-      raw_text: `支付宝账单 | ${r[iPeer] || ''} | ¥${amount} | ${status}`,
+      raw_text: `支付宝账单 | ${r[iPeer] || ''} | ¥${amount} | ${status}${billCat ? ' | ' + billCat : ''}`,
     })
   }
   return { rows: out }
